@@ -13,8 +13,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Setup & Commands
 
-No build system has been configured yet. Once `pyproject.toml` or equivalent is added, document the install, test, and lint commands here. The `.gitignore` references these tools as likely choices:
+### Backend (Python)
 
-- **Tests:** pytest
-- **Linting/formatting:** ruff
-- **Type checking:** mypy
+```bash
+uv sync                        # install deps (or: pip install -e ".[dev]")
+uv run fastapi dev earmark/main.py   # dev server on :8000
+uv run pytest                  # tests
+uv run ruff check .            # lint
+uv run ruff format .           # format
+uv run mypy earmark            # type check
+```
+
+### Frontend (SvelteKit)
+
+```bash
+cd frontend
+npm install
+npm run dev       # dev server on :5173 (proxies /api -> :8000)
+npm run build
+npm run check     # svelte-check + tsc
+```
+
+### Environment
+
+Copy `.env.example` to `.env` and fill in values before running the backend.
