@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from pydantic import BaseModel
 
 
@@ -8,24 +6,44 @@ class UserCreate(BaseModel):
     password: str
 
 
-class UserRead(BaseModel):
-    id: int
+class UserCreated(BaseModel):
     username: str
-    created_at: datetime
+
+
+class MetadataIn(BaseModel):
+    filename: str | None = None
+    title: str | None = None
+    authors: str | None = None
+
+
+class ProgressUpsert(BaseModel):
+    document: str
+    progress: str
+    percentage: float
+    device: str
+    device_id: str
+    metadata: MetadataIn | None = None
+
+
+class ProgressResponse(BaseModel):
+    document: str
+    progress: str
+    percentage: float
+    device: str
+    device_id: str
+    timestamp: int
 
     model_config = {"from_attributes": True}
 
 
-class ProgressUpdate(BaseModel):
-    document: str
-    progress: float
-    device: str = ""
-    device_id: str = ""
+class ProgressListItem(ProgressResponse):
+    filename: str | None = None
+    title: str | None = None
+    authors: str | None = None
 
 
-class ProgressRead(BaseModel):
-    document: str
-    progress: float
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
+class ProgressList(BaseModel):
+    data: list[ProgressListItem]
+    total: int
+    page: int
+    per_page: int
