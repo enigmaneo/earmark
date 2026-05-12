@@ -7,10 +7,10 @@ meta {
 get {
   url: {{base_url}}/users/auth
   body: none
-  auth: basic
+  auth: none
 }
 
-auth:basic {
-  username: {{username}}
-  password: {{password}}
+headers {
+  x-auth-user: {{username}}
+  x-auth-key: {{password_hash}}
 }
