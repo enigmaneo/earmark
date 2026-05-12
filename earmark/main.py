@@ -1,11 +1,11 @@
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from earmark.database import init_db
-from earmark.routers import progress, users
+from earmark.routers import auth, progress, users
 from earmark.scheduler import start_scheduler, stop_scheduler
 
 
@@ -27,6 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(progress.router)
 

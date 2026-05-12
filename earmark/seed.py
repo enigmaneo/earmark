@@ -4,16 +4,22 @@ import hashlib
 from sqlalchemy import select
 
 from earmark.database import AsyncSessionLocal, init_db
-from earmark.models import ReadingProgress, User
+from earmark.earmark_auth import hash_password
+from earmark.models import KosyncUser, ReadingProgress, User
 
 
 def md5(value: str) -> str:
     return hashlib.md5(value.encode()).hexdigest()
 
 
-USERS = [
-    {"username": "testuser", "password": "password"},
-    {"username": "alice", "password": "secret"},
+EARMARK_USERS = [
+    {"email": "testuser@example.com", "password": "password"},
+    {"email": "alice@example.com", "password": "secret"},
+]
+
+KOSYNC_USERS = [
+    {"username": "testuser", "password": "password", "earmark_email": "testuser@example.com"},
+    {"username": "alice", "password": "secret", "earmark_email": "alice@example.com"},
 ]
 
 PROGRESS: list[dict] = [
@@ -79,33 +85,54 @@ async def seed() -> None:
     await init_db()
 
     async with AsyncSessionLocal() as session:
-        # Seed users
-        user_map: dict[str, User] = {}
-        for u in USERS:
-            result = await session.execute(select(User).where(User.username == u["username"]))
+        # Seed earmark users
+        earmark_user_map: dict[str, User] = {}
+        for eu in EARMARK_USERS:
+            result = await session.execute(select(User).where(User.email == eu["email"]))
             user = result.scalar_one_or_none()
             if user is None:
-                user = User(username=u["username"], password_hash=md5(u["password"]))
+                user = User(email=eu["email"], password_hash=hash_password(eu["password"]))
                 session.add(user)
                 await session.flush()
-                print(f"  Created user: {u['username']}")
+                print(f"  Created earmark user: {eu['email']}")
             else:
-                print(f"  Skipped existing user: {u['username']}")
-            user_map[u["username"]] = user
+                print(f"  Skipped existing earmark user: {eu['email']}")
+            earmark_user_map[eu["email"]] = user
+
+        # Seed kosync users
+        kosync_user_map: dict[str, KosyncUser] = {}
+        for ku in KOSYNC_USERS:
+            result = await session.execute(
+                select(KosyncUser).where(KosyncUser.username == ku["username"])
+            )
+            kuser = result.scalar_one_or_none()
+            earmark_owner = earmark_user_map.get(ku["earmark_email"])
+            if kuser is None:
+                kuser = KosyncUser(
+                    username=ku["username"],
+                    password_hash=md5(ku["password"]),
+                    user_id=earmark_owner.id if earmark_owner else None,
+                )
+                session.add(kuser)
+                await session.flush()
+                print(f"  Created kosync user: {ku['username']}")
+            else:
+                print(f"  Skipped existing kosync user: {ku['username']}")
+            kosync_user_map[ku["username"]] = kuser
 
         # Seed progress records
         for p in PROGRESS:
-            owner = user_map[p["username"]]
+            owner = kosync_user_map[p["username"]]
             result = await session.execute(
                 select(ReadingProgress).where(
-                    ReadingProgress.user_id == owner.id,
+                    ReadingProgress.kosync_user_id == owner.id,
                     ReadingProgress.document == p["document"],
                 )
             )
             record = result.scalar_one_or_none()
             if record is None:
                 record = ReadingProgress(
-                    user_id=owner.id,
+                    kosync_user_id=owner.id,
                     document=p["document"],
                     progress=p["progress"],
                     percentage=p["percentage"],

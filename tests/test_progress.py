@@ -1,7 +1,7 @@
 import pytest
 from httpx import AsyncClient
 
-from tests.conftest import PROGRESS_PAYLOAD, md5
+from tests.conftest import PROGRESS_PAYLOAD
 
 DOC = PROGRESS_PAYLOAD["document"]
 
@@ -16,7 +16,7 @@ async def test_put_progress_creates_record(client: AsyncClient, alice: dict[str,
     assert "timestamp" in data
 
 
-async def test_put_progress_updates_when_higher(
+async def test_put_progress_creates_new_record_on_repeat(
     client: AsyncClient, alice: dict[str, str]
 ) -> None:
     await client.put("/syncs/progress", json=PROGRESS_PAYLOAD, headers=alice)
@@ -25,16 +25,21 @@ async def test_put_progress_updates_when_higher(
     assert response.status_code == 200
     assert response.json()["percentage"] == pytest.approx(0.5)
     assert response.json()["progress"] == "/body/div[2]"
+    # GET returns the latest entry, not the first
+    get_response = await client.get(f"/syncs/progress/{DOC}", headers=alice)
+    assert get_response.json()["percentage"] == pytest.approx(0.5)
 
 
-async def test_put_progress_furthest_wins(client: AsyncClient, alice: dict[str, str]) -> None:
+async def test_put_progress_lower_percentage_still_becomes_latest(
+    client: AsyncClient, alice: dict[str, str]
+) -> None:
     high = {**PROGRESS_PAYLOAD, "percentage": 0.9, "progress": "/body/div[99]"}
     await client.put("/syncs/progress", json=high, headers=alice)
     lower = {**PROGRESS_PAYLOAD, "percentage": 0.1, "progress": "/body/div[1]"}
     response = await client.put("/syncs/progress", json=lower, headers=alice)
     assert response.status_code == 200
-    assert response.json()["percentage"] == pytest.approx(0.9)
-    assert response.json()["progress"] == "/body/div[99]"
+    assert response.json()["percentage"] == pytest.approx(0.1)
+    assert response.json()["progress"] == "/body/div[1]"
 
 
 async def test_put_progress_with_metadata(client: AsyncClient, alice: dict[str, str]) -> None:
@@ -47,7 +52,7 @@ async def test_put_progress_with_metadata(client: AsyncClient, alice: dict[str, 
         },
     }
     await client.put("/syncs/progress", json=payload, headers=alice)
-    response = await client.get(f"/syncs/progress/{DOC}", headers=alice)
+    await client.get(f"/syncs/progress/{DOC}", headers=alice)
     # The GET single-record endpoint does not return metadata fields,
     # but the list endpoint does.
     list_response = await client.get("/syncs/progress", headers=alice)
@@ -71,6 +76,8 @@ async def test_get_progress_not_found(client: AsyncClient, alice: dict[str, str]
 
 async def test_list_progress(client: AsyncClient, alice: dict[str, str]) -> None:
     await client.put("/syncs/progress", json=PROGRESS_PAYLOAD, headers=alice)
+    # A second PUT for the same document should not increase the list count
+    await client.put("/syncs/progress", json={**PROGRESS_PAYLOAD, "percentage": 0.5}, headers=alice)
     response = await client.get("/syncs/progress", headers=alice)
     assert response.status_code == 200
     body = response.json()
