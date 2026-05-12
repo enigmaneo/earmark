@@ -1,0 +1,16 @@
+meta {
+  name: Get Progress
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{base_url}}/syncs/progress/{{document_id}}
+  body: none
+  auth: basic
+}
+
+auth:basic {
+  username: {{username}}
+  password: {{password}}
+}
