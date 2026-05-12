@@ -34,8 +34,18 @@ Requires Python 3.12+ and [uv](https://github.com/astral-sh/uv).
 
 ```bash
 uv sync
+uv run earmark-seed                  # create and seed the local database
 uv run fastapi dev earmark/main.py   # dev server on :8000
 ```
+
+The seed command creates two users and five reading progress records for local development:
+
+| Username | Password |
+|----------|----------|
+| testuser | password |
+| alice    | secret   |
+
+Running `earmark-seed` more than once is safe — it skips records that already exist.
 
 ### 3. Frontend
 

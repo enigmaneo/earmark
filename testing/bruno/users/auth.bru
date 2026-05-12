@@ -1,0 +1,16 @@
+meta {
+  name: Auth
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/users/auth
+  body: none
+  auth: none
+}
+
+headers {
+  x-auth-user: {{username}}
+  x-auth-key: {{password_hash}}
+}

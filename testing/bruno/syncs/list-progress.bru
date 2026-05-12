@@ -1,0 +1,21 @@
+meta {
+  name: List Progress
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/syncs/progress
+  body: none
+  auth: none
+}
+
+headers {
+  x-auth-user: {{username}}
+  x-auth-key: {{password_hash}}
+}
+
+params:query {
+  page: 1
+  per_page: 50
+}
