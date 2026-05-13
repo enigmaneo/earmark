@@ -21,6 +21,8 @@ Project documentation lives in `docs/`:
 
 - [`docs/KosyncApi.md`](docs/KosyncApi.md) — KOSync API reference
 - [`docs/Frontend.md`](docs/Frontend.md) — Frontend design principles (theming, layout, accessibility)
+- [`docs/AudioBookEbookMapping.md`](docs/AudioBookEbookMapping.md) — Audiobook-ebook mapping and alignment
+- [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) — Alignment pipeline testing guide
 
 ## Rules
 
