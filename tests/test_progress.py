@@ -55,7 +55,7 @@ async def test_put_progress_with_metadata(client: AsyncClient, alice: dict[str, 
     await client.get(f"/syncs/progress/{DOC}", headers=alice)
     # The GET single-record endpoint does not return metadata fields,
     # but the list endpoint does.
-    list_response = await client.get("/syncs/progress", headers=alice)
+    list_response = await client.get(f"/syncs/progress?document={DOC}", headers=alice)
     item = list_response.json()["data"][0]
     assert item["filename"] == "gatsby.epub"
     assert item["title"] == "The Great Gatsby"
@@ -76,25 +76,34 @@ async def test_get_progress_not_found(client: AsyncClient, alice: dict[str, str]
 
 async def test_list_progress(client: AsyncClient, alice: dict[str, str]) -> None:
     await client.put("/syncs/progress", json=PROGRESS_PAYLOAD, headers=alice)
-    # A second PUT for the same document should not increase the list count
-    await client.put("/syncs/progress", json={**PROGRESS_PAYLOAD, "percentage": 0.5}, headers=alice)
-    response = await client.get("/syncs/progress", headers=alice)
+    # A second PUT for the same document creates a new historical entry
+    higher = {**PROGRESS_PAYLOAD, "percentage": 0.5}
+    await client.put("/syncs/progress", json=higher, headers=alice)
+    response = await client.get(f"/syncs/progress?document={DOC}", headers=alice)
     assert response.status_code == 200
     body = response.json()
-    assert body["total"] == 1
+    assert body["total"] == 2
     assert body["page"] == 1
-    assert len(body["data"]) == 1
+    assert len(body["data"]) == 2
+    # Most recent entry comes first
+    assert body["data"][0]["percentage"] == pytest.approx(0.5)
+    assert body["data"][1]["percentage"] == pytest.approx(0.2082)
 
 
 async def test_list_progress_pagination(client: AsyncClient, alice: dict[str, str]) -> None:
+    # Create 5 entries for the same document
     for i in range(5):
-        payload = {**PROGRESS_PAYLOAD, "document": f"doc{i}", "percentage": i * 0.1}
+        payload = {**PROGRESS_PAYLOAD, "percentage": i * 0.1}
         await client.put("/syncs/progress", json=payload, headers=alice)
-    response = await client.get("/syncs/progress?page=1&per_page=3", headers=alice)
+    response = await client.get(f"/syncs/progress?document={DOC}&page=1&per_page=3", headers=alice)
     body = response.json()
     assert body["total"] == 5
     assert body["per_page"] == 3
     assert len(body["data"]) == 3
+    # Page 2
+    response = await client.get(f"/syncs/progress?document={DOC}&page=2&per_page=3", headers=alice)
+    body = response.json()
+    assert len(body["data"]) == 2
 
 
 async def test_delete_progress(client: AsyncClient, alice: dict[str, str]) -> None:
@@ -121,7 +130,7 @@ async def test_get_progress_auth_required(client: AsyncClient) -> None:
 
 
 async def test_list_progress_auth_required(client: AsyncClient) -> None:
-    response = await client.get("/syncs/progress")
+    response = await client.get(f"/syncs/progress?document={DOC}")
     assert response.status_code == 422
 
 

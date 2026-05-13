@@ -32,6 +32,7 @@ def _to_list_item(r: ReadingProgress) -> ProgressListItem:
         filename=r.filename,
         title=r.title,
         authors=r.authors,
+        is_latest=r.is_latest,
     )
 
 
@@ -89,27 +90,25 @@ async def get_progress(
 
 @router.get("/progress", response_model=ProgressList)
 async def list_progress(
+    document: str = Query(...),
     user: KosyncUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=1, le=100),
 ) -> ProgressList:
+    where = [
+        ReadingProgress.kosync_user_id == user.id,
+        ReadingProgress.document == document,
+    ]
     count_result = await session.execute(
-        select(func.count())
-        .select_from(ReadingProgress)
-        .where(
-            ReadingProgress.kosync_user_id == user.id,
-            ReadingProgress.is_latest == True,  # noqa: E712
-        )
+        select(func.count()).select_from(ReadingProgress).where(*where)
     )
     total = count_result.scalar_one()
 
     rows_result = await session.execute(
         select(ReadingProgress)
-        .where(
-            ReadingProgress.kosync_user_id == user.id,
-            ReadingProgress.is_latest == True,  # noqa: E712
-        )
+        .where(*where)
+        .order_by(ReadingProgress.updated_at.desc(), ReadingProgress.id.desc())
         .offset((page - 1) * per_page)
         .limit(per_page)
     )

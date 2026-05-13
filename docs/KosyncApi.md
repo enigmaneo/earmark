@@ -196,11 +196,17 @@ The following endpoints are earmark extensions — they are not part of the KOSy
 
 #### GET /syncs/progress
 
-List all reading progress entries for the authenticated user.
+List all historical reading progress entries for a specific document. Returns all sync records in reverse chronological order (most recent first).
 
 ##### Request
 
 Authentication headers required. No request body.
+
+Required query parameters:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `document` | string | MD5 hash of the book file |
 
 Optional query parameters:
 
@@ -231,7 +237,7 @@ Optional query parameters:
       "timestamp": 1703123456
     }
   ],
-  "total": 42,
+  "total": 5,
   "page": 1,
   "per_page": 50
 }

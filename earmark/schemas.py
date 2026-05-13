@@ -60,6 +60,7 @@ class ProgressListItem(ProgressResponse):
     filename: str | None = None
     title: str | None = None
     authors: str | None = None
+    is_latest: bool | None = None
 
 
 class ProgressList(BaseModel):
