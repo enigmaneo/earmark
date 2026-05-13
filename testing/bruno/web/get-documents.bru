@@ -1,0 +1,15 @@
+meta {
+  name: Get Documents
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{base_url}}/web/documents
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
