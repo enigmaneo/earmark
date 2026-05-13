@@ -57,10 +57,16 @@ class ProgressResponse(BaseModel):
 
 
 class ProgressListItem(ProgressResponse):
+    id: int
     filename: str | None = None
     title: str | None = None
     authors: str | None = None
     is_latest: bool | None = None
+
+
+class DocumentSummary(BaseModel):
+    document: str
+    title: str | None = None
 
 
 class ProgressList(BaseModel):

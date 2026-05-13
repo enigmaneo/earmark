@@ -1,11 +1,14 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from earmark.auth import get_current_user
 from earmark.database import get_session
-from earmark.models import KosyncUser, ReadingProgress
-from earmark.schemas import ProgressList, ProgressListItem, ProgressResponse, ProgressUpsert
+from earmark.earmark_auth import get_current_earmark_user
+from earmark.models import KosyncUser, ReadingProgress, User
+from earmark.schemas import DocumentSummary, ProgressList, ProgressListItem, ProgressResponse, ProgressUpsert
 
 router = APIRouter(prefix="/syncs", tags=["syncs"])
 
@@ -23,6 +26,7 @@ def _to_response(r: ReadingProgress) -> ProgressResponse:
 
 def _to_list_item(r: ReadingProgress) -> ProgressListItem:
     return ProgressListItem(
+        id=r.id,
         document=r.document,
         progress=r.progress,
         percentage=r.percentage,
@@ -146,3 +150,96 @@ async def delete_progress(
     )
     await session.commit()
     return {"deleted": document}
+
+
+_SORT_COLUMNS = {
+    "title": ReadingProgress.title,
+    "percentage": ReadingProgress.percentage,
+    "progress": ReadingProgress.progress,
+    "device": ReadingProgress.device,
+    "is_latest": ReadingProgress.is_latest,
+    "updated_at": ReadingProgress.updated_at,
+}
+
+web_router = APIRouter(prefix="/web", tags=["web"])
+
+
+@web_router.get("/documents", response_model=list[DocumentSummary])
+async def web_list_documents(
+    user: User = Depends(get_current_earmark_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[DocumentSummary]:
+    result = await session.execute(
+        select(ReadingProgress.document, func.max(ReadingProgress.title).label("title"))
+        .join(KosyncUser, ReadingProgress.kosync_user_id == KosyncUser.id)
+        .where(KosyncUser.user_id == user.id)
+        .group_by(ReadingProgress.document)
+        .order_by(ReadingProgress.document)
+    )
+    rows = result.all()
+    return [DocumentSummary(document=r.document, title=r.title) for r in rows]
+
+
+@web_router.get("/progress", response_model=ProgressList)
+async def web_list_progress(
+    user: User = Depends(get_current_earmark_user),
+    session: AsyncSession = Depends(get_session),
+    document: str | None = Query(default=None),
+    sort_by: Literal["title", "percentage", "progress", "device", "is_latest", "updated_at"] = Query(default="updated_at"),
+    sort_dir: Literal["asc", "desc"] = Query(default="desc"),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=1, le=100),
+) -> ProgressList:
+    where = [KosyncUser.user_id == user.id]
+    if document is not None:
+        where.append(ReadingProgress.document == document)
+
+    base = (
+        select(ReadingProgress)
+        .join(KosyncUser, ReadingProgress.kosync_user_id == KosyncUser.id)
+        .where(*where)
+    )
+
+    col = _SORT_COLUMNS[sort_by]
+    order_col = col.asc() if sort_dir == "asc" else col.desc()
+
+    count_result = await session.execute(
+        select(func.count())
+        .select_from(ReadingProgress)
+        .join(KosyncUser, ReadingProgress.kosync_user_id == KosyncUser.id)
+        .where(*where)
+    )
+    total = count_result.scalar_one()
+
+    rows_result = await session.execute(
+        base.order_by(order_col, ReadingProgress.id.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+    )
+    records = rows_result.scalars().all()
+
+    return ProgressList(
+        data=[_to_list_item(r) for r in records],
+        total=total,
+        page=page,
+        per_page=per_page,
+    )
+
+
+@web_router.delete("/records/{record_id}")
+async def web_delete_record(
+    record_id: int,
+    user: User = Depends(get_current_earmark_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, int]:
+    result = await session.execute(
+        select(ReadingProgress)
+        .join(KosyncUser, ReadingProgress.kosync_user_id == KosyncUser.id)
+        .where(ReadingProgress.id == record_id, KosyncUser.user_id == user.id)
+    )
+    record = result.scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    await session.delete(record)
+    await session.commit()
+    return {"deleted": record_id}
