@@ -219,3 +219,4 @@ __marimo__/
 
 # Node Stuff
 node_modules/
+.svelte-kit/
