@@ -24,8 +24,8 @@ class AudiobookshelfClient:
         response.raise_for_status()
         return response.json()  # type: ignore[no-any-return]
 
-    async def download_audio_file(self, item_id: str, filename: str, dest_path: Path) -> None:
-        url = f"/api/items/{item_id}/file/{filename}"
+    async def download_audio_file(self, item_id: str, file_id: str, dest_path: Path) -> None:
+        url = f"/api/items/{item_id}/file/{file_id}"
         async with self._client.stream("GET", url, timeout=_DOWNLOAD_TIMEOUT) as response:
             response.raise_for_status()
             dest_path.parent.mkdir(parents=True, exist_ok=True)

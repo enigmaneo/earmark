@@ -206,7 +206,8 @@ async def main() -> int:
     print(f"  Sync map   : {finished.sync_map_path}")
     print()
     print("Sync map preview (first 10 entries):")
-    _print_sync_map_preview(Path(finished.sync_map_path))
+    if finished.sync_map_path:
+        _print_sync_map_preview(Path(finished.sync_map_path))
 
     return 0
 

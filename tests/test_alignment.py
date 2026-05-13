@@ -32,6 +32,7 @@ ABS_METADATA: dict[str, Any] = {
         "audioFiles": [
             {
                 "index": 1,
+                "ino": "test_ino_001",
                 "metadata": {"filename": "chapter01.mp3"},
                 "filename": "chapter01.mp3",
                 "duration": 100.0,

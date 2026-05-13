@@ -56,7 +56,7 @@ def _ffmpeg_concat_sync(audio_files: list[Path], output_path: Path) -> None:
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         concat_list = Path(f.name)
         for p in audio_files:
-            f.write(f"file '{p}'\n")
+            f.write(f"file '{p.absolute()}'\n")
 
     try:
         (
@@ -184,6 +184,7 @@ class AlignmentPipeline:
         width = max(3, len(str(len(sorted_files))))
 
         for i, af in enumerate(sorted_files):
+            ino = af.get("ino", "")
             filename = af.get("metadata", {}).get("filename") or af.get("filename", "")
             dest = audio_dir / f"{i:0{width}}_{filename}"
             if dest.exists():
@@ -191,7 +192,7 @@ class AlignmentPipeline:
             for attempt in range(3):
                 try:
                     await self._abs.download_audio_file(
-                        self.job.abs_item_id, filename, dest
+                        self.job.abs_item_id, ino, dest
                     )
                     break
                 except httpx.HTTPError:
