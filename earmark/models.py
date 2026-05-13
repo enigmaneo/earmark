@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from earmark.database import Base
@@ -49,3 +49,48 @@ class ReadingProgress(Base):
     )
 
     kosync_user: Mapped["KosyncUser"] = relationship(back_populates="progress")
+
+
+class AbsLibraryItem(Base):
+    __tablename__ = "abs_library_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    abs_item_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    library_id: Mapped[str] = mapped_column(String(255))
+    title: Mapped[str] = mapped_column(String(500))
+    author: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    ebook_filename: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    ebook_format: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    audio_file_count: Mapped[int] = mapped_column(Integer)
+    total_duration_seconds: Mapped[float] = mapped_column(Float)
+    abs_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    raw_metadata: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    alignment_jobs: Mapped[list["AlignmentJob"]] = relationship(back_populates="library_item")
+
+
+class AlignmentJob(Base):
+    __tablename__ = "alignment_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    abs_item_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("abs_library_items.abs_item_id"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    audio_cache_dir: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    ebook_cache_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    sync_map_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    paragraph_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fragment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    library_item: Mapped["AbsLibraryItem"] = relationship(back_populates="alignment_jobs")

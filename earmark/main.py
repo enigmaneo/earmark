@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from earmark.database import init_db
-from earmark.routers import auth, progress, users
+from earmark.routers import alignment, auth, progress, users
 from earmark.routers.progress import web_router
 from earmark.scheduler import start_scheduler, stop_scheduler
 
@@ -32,6 +32,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(progress.router)
 app.include_router(web_router)
+app.include_router(alignment.router)
 
 
 @app.get("/healthcheck")

@@ -17,5 +17,12 @@ class Settings(BaseSettings):
 
     sync_interval_minutes: int = 5
 
+    ebook_source: str = "abs"  # "abs" | "cwa" | "local"
+    cwa_url: str = ""
+    cwa_username: str = ""
+    cwa_password: str = ""
+    ebook_local_root: str = ""
+    alignment_cache_dir: str = ".cache/earmark"
+
 
 settings = Settings()

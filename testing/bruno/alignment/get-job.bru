@@ -1,0 +1,15 @@
+meta {
+  name: Get Alignment Job
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{base_url}}/alignment/jobs/{{job_id}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}

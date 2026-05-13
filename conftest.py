@@ -2,7 +2,7 @@ import hashlib
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from earmark.database import Base, get_session
@@ -12,7 +12,7 @@ TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 
 @pytest.fixture
-async def client():
+async def db_session_factory():
     engine = create_async_engine(
         TEST_DB_URL,
         connect_args={"check_same_thread": False},
@@ -21,10 +21,18 @@ async def client():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield factory
 
-    async def override_get_session():  # type: ignore[return]
-        async with session_factory() as session:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
+
+
+@pytest.fixture
+async def client(db_session_factory: async_sessionmaker):  # type: ignore[type-arg]
+    async def override_get_session() -> AsyncSession:  # type: ignore[return]
+        async with db_session_factory() as session:
             yield session
 
     app.dependency_overrides[get_session] = override_get_session
@@ -33,9 +41,6 @@ async def client():
         yield ac
 
     app.dependency_overrides.clear()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-    await engine.dispose()
 
 
 def md5(value: str) -> str:
