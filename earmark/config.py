@@ -6,6 +6,9 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite+aiosqlite:///./earmark.db"
 
+    secret_key: str = "change-me-in-production"
+    access_token_expire_minutes: int = 60 * 24 * 7
+
     audiobookshelf_url: str = ""
     audiobookshelf_api_key: str = ""
 

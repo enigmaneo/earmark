@@ -4,7 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`earmark` syncs Audiobookshelf and KOSync reading progress. It runs its own KOSync server. The repository is in early setup — no source code, build tooling, or package configuration exists yet. Update this file as the project takes shape.
+`earmark` syncs Audiobookshelf and KOSync reading progress. It runs its own KOSync server.
+
+## User Model
+
+There are two separate user systems:
+
+- **User** (`users` table) — the earmark web app user. Authenticates with email + password (bcrypt). Issues JWT tokens used for the web session.
+- **KosyncUser** (`kosync_users` table) — the KOReader/KOSync user. Authenticates with `x-auth-user` / `x-auth-key` headers (MD5 hash, per KOSync protocol). One User can own many KosyncUsers.
+
+Web sessions are stored as HTTP-only cookies (`earmark_session`) containing a JWT Bearer token. The SvelteKit frontend validates the session by calling `GET /auth/me`.
+
+## Docs
+
+Project documentation lives in `docs/`:
+
+- [`docs/KosyncApi.md`](docs/KosyncApi.md) — KOSync API reference
+- [`docs/Frontend.md`](docs/Frontend.md) — Frontend design principles (theming, layout, accessibility)
 
 ## Rules
 
@@ -37,3 +53,6 @@ npm run check     # svelte-check + tsc
 ### Environment
 
 Copy `.env.example` to `.env` and fill in values before running the backend.
+
+Required variables:
+- `SECRET_KEY` — used to sign JWTs; must be set to a strong random value in production

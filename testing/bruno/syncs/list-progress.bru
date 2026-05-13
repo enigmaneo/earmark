@@ -5,17 +5,18 @@ meta {
 }
 
 get {
-  url: {{base_url}}/syncs/progress
+  url: {{base_url}}/syncs/progress?document={{document_id}}&page=1&per_page=50
   body: none
   auth: none
+}
+
+params:query {
+  document: {{document_id}}
+  page: 1
+  per_page: 50
 }
 
 headers {
   x-auth-user: {{username}}
   x-auth-key: {{password_hash}}
-}
-
-params:query {
-  page: 1
-  per_page: 50
 }

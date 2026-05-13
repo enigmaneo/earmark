@@ -77,7 +77,7 @@ Authentication headers required. No request body.
 
 ### PUT /syncs/progress
 
-Upload or update the reading position for a document. If the stored percentage is already higher than the incoming percentage, the server keeps the existing record ("furthest progress wins").
+Upload the reading position for a document. Each call always creates a new record — existing records are never modified. The most recently created record is marked as the current position and is what `GET /syncs/progress/:document` returns. This endpoint is API-compatible with KOReader; the client behaviour is unchanged.
 
 #### Request
 
@@ -196,11 +196,17 @@ The following endpoints are earmark extensions — they are not part of the KOSy
 
 #### GET /syncs/progress
 
-List all reading progress entries for the authenticated user.
+List all historical reading progress entries for a specific document. Returns all sync records in reverse chronological order (most recent first).
 
 ##### Request
 
 Authentication headers required. No request body.
+
+Required query parameters:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `document` | string | MD5 hash of the book file |
 
 Optional query parameters:
 
@@ -231,7 +237,7 @@ Optional query parameters:
       "timestamp": 1703123456
     }
   ],
-  "total": 42,
+  "total": 5,
   "page": 1,
   "per_page": 50
 }
@@ -286,23 +292,22 @@ Stores registered accounts. No changes needed from the initial model.
 
 ### `reading_progress`
 
-Stores the latest reading position per user per book. One row per `(user_id, document)` pair — upserted on each `PUT /syncs/progress` call, subject to the "furthest progress wins" rule.
+Append-only log of reading positions. Each `PUT /syncs/progress` call inserts a new row — existing rows are never modified. The row with `is_latest = true` for a given `(kosync_user_id, document)` pair is the current position. Records can only be deleted, never updated.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
 | `id` | INTEGER | PK, autoincrement | Internal row ID |
-| `user_id` | INTEGER | FK → users.id, NOT NULL, indexed | Owning user |
+| `kosync_user_id` | INTEGER | FK → kosync_users.id, NOT NULL, indexed | Owning KOSync user |
 | `document` | VARCHAR(500) | NOT NULL, indexed | MD5 hash of the book file |
 | `progress` | VARCHAR(1000) | NOT NULL | XPath position string from KOReader (e.g. `/body/DocFragment[15]/body/div[65]/text()[1].41`) |
-| `percentage` | FLOAT | NOT NULL | Reading fraction 0.0–1.0; compared on upsert to enforce "furthest progress wins" |
-| `device` | VARCHAR(255) | NOT NULL | Device name of the last writer |
-| `device_id` | VARCHAR(255) | NOT NULL | Unique device identifier of the last writer |
+| `percentage` | FLOAT | NOT NULL | Reading fraction 0.0–1.0 |
+| `device` | VARCHAR(255) | NOT NULL | Device name |
+| `device_id` | VARCHAR(255) | NOT NULL | Unique device identifier |
 | `filename` | VARCHAR(500) | nullable | Original book filename, populated when KOReader sends metadata |
 | `title` | VARCHAR(500) | nullable | Book title, populated when KOReader sends metadata |
 | `authors` | VARCHAR(500) | nullable | Author name(s), populated when KOReader sends metadata |
-| `updated_at` | DATETIME | NOT NULL, server default + onupdate | Last write timestamp; returned as `timestamp` in API responses |
-
-**Unique constraint:** `(user_id, document)`
+| `is_latest` | BOOLEAN | NOT NULL, default true | True on the most recently inserted row for this `(kosync_user_id, document)` pair; false on all prior rows |
+| `updated_at` | DATETIME | NOT NULL, server default | Insert timestamp; returned as `timestamp` in API responses |
 
 #### Changes required from the current model (`earmark/models.py`)
 

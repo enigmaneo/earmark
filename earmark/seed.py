@@ -3,23 +3,68 @@ import hashlib
 
 from sqlalchemy import select
 
-from earmark.database import AsyncSessionLocal, init_db
-from earmark.models import ReadingProgress, User
+from earmark.database import AsyncSessionLocal, Base, engine, init_db
+from earmark.earmark_auth import hash_password
+from earmark.models import KosyncUser, ReadingProgress, User
 
 
 def md5(value: str) -> str:
     return hashlib.md5(value.encode()).hexdigest()
 
 
-USERS = [
-    {"username": "testuser", "password": "password"},
-    {"username": "alice", "password": "secret"},
+EARMARK_USERS = [
+    {"email": "testuser@example.com", "password": "password"},
+    {"email": "alice@example.com", "password": "secret"},
+    {"email": "bob@example.com", "password": "hunter2"},
+    {"email": "carol@example.com", "password": "carol123"},
 ]
 
+KOSYNC_USERS = [
+    {"username": "testuser", "password": "password", "earmark_email": "testuser@example.com"},
+    {"username": "alice", "password": "secret", "earmark_email": "alice@example.com"},
+    {"username": "bob", "password": "hunter2", "earmark_email": "bob@example.com"},
+    {"username": "carol", "password": "carol123", "earmark_email": "carol@example.com"},
+]
+
+# Document hash constants for readability
+DOC_NAME_OF_THE_WIND = "8b03a82761fae0ee6cd5a23700361e74"
+DOC_DUNE = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+DOC_PROJECT_HAIL_MARY = "deadbeefdeadbeefdeadbeefdeadbeef"
+DOC_MISTBORN = "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+DOC_HYPERION = "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d"
+DOC_FOUNDATION = "aaaabbbbccccddddaaaabbbbccccdddd"
+DOC_NEUROMANCER = "1111222233334444111122223333444"
+DOC_ENDERS_GAME = "abcdef0123456789abcdef0123456789"
+
 PROGRESS: list[dict] = [
+    # --- testuser: Name of the Wind (3 entries across devices) ---
     {
         "username": "testuser",
-        "document": "8b03a82761fae0ee6cd5a23700361e74",
+        "document": DOC_NAME_OF_THE_WIND,
+        "progress": "/body/DocFragment[8]/body/div[12]/text()[1].0",
+        "percentage": 0.10,
+        "device": "boox",
+        "device_id": "197E7C6B3FD54A749C87DE9C1B05A3CE",
+        "title": "The Name of the Wind",
+        "authors": "Patrick Rothfuss",
+        "filename": "name-of-the-wind.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "testuser",
+        "document": DOC_NAME_OF_THE_WIND,
+        "progress": "/body/DocFragment[12]/body/div[44]/text()[1].20",
+        "percentage": 0.15,
+        "device": "boox",
+        "device_id": "197E7C6B3FD54A749C87DE9C1B05A3CE",
+        "title": "The Name of the Wind",
+        "authors": "Patrick Rothfuss",
+        "filename": "name-of-the-wind.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "testuser",
+        "document": DOC_NAME_OF_THE_WIND,
         "progress": "/body/DocFragment[15]/body/div[65]/text()[1].41",
         "percentage": 0.2082,
         "device": "boox",
@@ -27,10 +72,36 @@ PROGRESS: list[dict] = [
         "title": "The Name of the Wind",
         "authors": "Patrick Rothfuss",
         "filename": "name-of-the-wind.epub",
+        "is_latest": True,
+    },
+    # --- testuser: Dune (3 entries) ---
+    {
+        "username": "testuser",
+        "document": DOC_DUNE,
+        "progress": "/body/DocFragment[1]/body/p[2]/text()[1].0",
+        "percentage": 0.02,
+        "device": "boox",
+        "device_id": "197E7C6B3FD54A749C87DE9C1B05A3CE",
+        "title": "Dune",
+        "authors": "Frank Herbert",
+        "filename": "dune.epub",
+        "is_latest": False,
     },
     {
         "username": "testuser",
-        "document": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+        "document": DOC_DUNE,
+        "progress": "/body/DocFragment[2]/body/p[8]/text()[1].0",
+        "percentage": 0.04,
+        "device": "boox",
+        "device_id": "197E7C6B3FD54A749C87DE9C1B05A3CE",
+        "title": "Dune",
+        "authors": "Frank Herbert",
+        "filename": "dune.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "testuser",
+        "document": DOC_DUNE,
         "progress": "/body/DocFragment[3]/body/p[12]/text()[1].0",
         "percentage": 0.05,
         "device": "boox",
@@ -38,21 +109,36 @@ PROGRESS: list[dict] = [
         "title": "Dune",
         "authors": "Frank Herbert",
         "filename": "dune.epub",
+        "is_latest": True,
     },
+    # --- alice: Name of the Wind (3 entries) ---
     {
-        "username": "testuser",
-        "document": "deadbeefdeadbeefdeadbeefdeadbeef",
-        "progress": "/body/DocFragment[40]/body/div[2]/text()[1].99",
-        "percentage": 0.91,
-        "device": "kindle",
-        "device_id": "KINDLE001",
-        "title": "Project Hail Mary",
-        "authors": "Andy Weir",
-        "filename": "project-hail-mary.epub",
+        "username": "alice",
+        "document": DOC_NAME_OF_THE_WIND,
+        "progress": "/body/DocFragment[10]/body/div[3]/text()[1].0",
+        "percentage": 0.22,
+        "device": "kobo",
+        "device_id": "KOBO001",
+        "title": "The Name of the Wind",
+        "authors": "Patrick Rothfuss",
+        "filename": "name-of-the-wind.epub",
+        "is_latest": False,
     },
     {
         "username": "alice",
-        "document": "8b03a82761fae0ee6cd5a23700361e74",
+        "document": DOC_NAME_OF_THE_WIND,
+        "progress": "/body/DocFragment[16]/body/div[7]/text()[1].2",
+        "percentage": 0.33,
+        "device": "kobo",
+        "device_id": "KOBO001",
+        "title": "The Name of the Wind",
+        "authors": "Patrick Rothfuss",
+        "filename": "name-of-the-wind.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "alice",
+        "document": DOC_NAME_OF_THE_WIND,
         "progress": "/body/DocFragment[22]/body/div[10]/text()[1].5",
         "percentage": 0.44,
         "device": "kobo",
@@ -60,10 +146,12 @@ PROGRESS: list[dict] = [
         "title": "The Name of the Wind",
         "authors": "Patrick Rothfuss",
         "filename": "name-of-the-wind.epub",
+        "is_latest": True,
     },
+    # --- alice: Mistborn (3 entries) ---
     {
         "username": "alice",
-        "document": "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0",
+        "document": DOC_MISTBORN,
         "progress": "/body/DocFragment[1]/body/p[1]/text()[1].0",
         "percentage": 0.01,
         "device": "kobo",
@@ -71,54 +159,241 @@ PROGRESS: list[dict] = [
         "title": "Mistborn",
         "authors": "Brandon Sanderson",
         "filename": "mistborn.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "alice",
+        "document": DOC_MISTBORN,
+        "progress": "/body/DocFragment[5]/body/p[3]/text()[1].0",
+        "percentage": 0.08,
+        "device": "kobo",
+        "device_id": "KOBO001",
+        "title": "Mistborn",
+        "authors": "Brandon Sanderson",
+        "filename": "mistborn.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "alice",
+        "document": DOC_MISTBORN,
+        "progress": "/body/DocFragment[11]/body/p[6]/text()[1].0",
+        "percentage": 0.19,
+        "device": "kobo",
+        "device_id": "KOBO001",
+        "title": "Mistborn",
+        "authors": "Brandon Sanderson",
+        "filename": "mistborn.epub",
+        "is_latest": True,
+    },
+    # --- bob: Hyperion (3 entries) ---
+    {
+        "username": "bob",
+        "document": DOC_HYPERION,
+        "progress": "/body/DocFragment[4]/body/div[2]/text()[1].0",
+        "percentage": 0.12,
+        "device": "kindle",
+        "device_id": "KINDLE002",
+        "title": "Hyperion",
+        "authors": "Dan Simmons",
+        "filename": "hyperion.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "bob",
+        "document": DOC_HYPERION,
+        "progress": "/body/DocFragment[9]/body/div[5]/text()[1].0",
+        "percentage": 0.28,
+        "device": "kindle",
+        "device_id": "KINDLE002",
+        "title": "Hyperion",
+        "authors": "Dan Simmons",
+        "filename": "hyperion.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "bob",
+        "document": DOC_HYPERION,
+        "progress": "/body/DocFragment[18]/body/div[11]/text()[1].3",
+        "percentage": 0.51,
+        "device": "kindle",
+        "device_id": "KINDLE002",
+        "title": "Hyperion",
+        "authors": "Dan Simmons",
+        "filename": "hyperion.epub",
+        "is_latest": True,
+    },
+    # --- bob: Foundation (3 entries) ---
+    {
+        "username": "bob",
+        "document": DOC_FOUNDATION,
+        "progress": "/body/DocFragment[2]/body/p[4]/text()[1].0",
+        "percentage": 0.07,
+        "device": "kindle",
+        "device_id": "KINDLE002",
+        "title": "Foundation",
+        "authors": "Isaac Asimov",
+        "filename": "foundation.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "bob",
+        "document": DOC_FOUNDATION,
+        "progress": "/body/DocFragment[6]/body/p[9]/text()[1].0",
+        "percentage": 0.21,
+        "device": "kindle",
+        "device_id": "KINDLE002",
+        "title": "Foundation",
+        "authors": "Isaac Asimov",
+        "filename": "foundation.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "bob",
+        "document": DOC_FOUNDATION,
+        "progress": "/body/DocFragment[14]/body/p[2]/text()[1].0",
+        "percentage": 0.47,
+        "device": "kindle",
+        "device_id": "KINDLE002",
+        "title": "Foundation",
+        "authors": "Isaac Asimov",
+        "filename": "foundation.epub",
+        "is_latest": True,
+    },
+    # --- carol: Neuromancer (3 entries) ---
+    {
+        "username": "carol",
+        "document": DOC_NEUROMANCER,
+        "progress": "/body/DocFragment[3]/body/div[1]/text()[1].0",
+        "percentage": 0.09,
+        "device": "boox",
+        "device_id": "BOOX_CAROL",
+        "title": "Neuromancer",
+        "authors": "William Gibson",
+        "filename": "neuromancer.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "carol",
+        "document": DOC_NEUROMANCER,
+        "progress": "/body/DocFragment[7]/body/div[4]/text()[1].0",
+        "percentage": 0.31,
+        "device": "boox",
+        "device_id": "BOOX_CAROL",
+        "title": "Neuromancer",
+        "authors": "William Gibson",
+        "filename": "neuromancer.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "carol",
+        "document": DOC_NEUROMANCER,
+        "progress": "/body/DocFragment[13]/body/div[8]/text()[1].15",
+        "percentage": 0.63,
+        "device": "boox",
+        "device_id": "BOOX_CAROL",
+        "title": "Neuromancer",
+        "authors": "William Gibson",
+        "filename": "neuromancer.epub",
+        "is_latest": True,
+    },
+    # --- carol: Ender's Game (3 entries) ---
+    {
+        "username": "carol",
+        "document": DOC_ENDERS_GAME,
+        "progress": "/body/DocFragment[2]/body/p[5]/text()[1].0",
+        "percentage": 0.06,
+        "device": "boox",
+        "device_id": "BOOX_CAROL",
+        "title": "Ender's Game",
+        "authors": "Orson Scott Card",
+        "filename": "enders-game.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "carol",
+        "document": DOC_ENDERS_GAME,
+        "progress": "/body/DocFragment[8]/body/p[3]/text()[1].0",
+        "percentage": 0.38,
+        "device": "boox",
+        "device_id": "BOOX_CAROL",
+        "title": "Ender's Game",
+        "authors": "Orson Scott Card",
+        "filename": "enders-game.epub",
+        "is_latest": False,
+    },
+    {
+        "username": "carol",
+        "document": DOC_ENDERS_GAME,
+        "progress": "/body/DocFragment[20]/body/p[11]/text()[1].0",
+        "percentage": 0.75,
+        "device": "boox",
+        "device_id": "BOOX_CAROL",
+        "title": "Ender's Game",
+        "authors": "Orson Scott Card",
+        "filename": "enders-game.epub",
+        "is_latest": True,
     },
 ]
 
 
 async def seed() -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
     await init_db()
 
     async with AsyncSessionLocal() as session:
-        # Seed users
-        user_map: dict[str, User] = {}
-        for u in USERS:
-            result = await session.execute(select(User).where(User.username == u["username"]))
+        # Seed earmark users
+        earmark_user_map: dict[str, User] = {}
+        for eu in EARMARK_USERS:
+            result = await session.execute(select(User).where(User.email == eu["email"]))
             user = result.scalar_one_or_none()
             if user is None:
-                user = User(username=u["username"], password_hash=md5(u["password"]))
+                user = User(email=eu["email"], password_hash=hash_password(eu["password"]))
                 session.add(user)
                 await session.flush()
-                print(f"  Created user: {u['username']}")
+                print(f"  Created earmark user: {eu['email']}")
             else:
-                print(f"  Skipped existing user: {u['username']}")
-            user_map[u["username"]] = user
+                print(f"  Skipped existing earmark user: {eu['email']}")
+            earmark_user_map[eu["email"]] = user
+
+        # Seed kosync users
+        kosync_user_map: dict[str, KosyncUser] = {}
+        for ku in KOSYNC_USERS:
+            result = await session.execute(
+                select(KosyncUser).where(KosyncUser.username == ku["username"])
+            )
+            kuser = result.scalar_one_or_none()
+            earmark_owner = earmark_user_map.get(ku["earmark_email"])
+            if kuser is None:
+                kuser = KosyncUser(
+                    username=ku["username"],
+                    password_hash=md5(ku["password"]),
+                    user_id=earmark_owner.id if earmark_owner else None,
+                )
+                session.add(kuser)
+                await session.flush()
+                print(f"  Created kosync user: {ku['username']}")
+            else:
+                print(f"  Skipped existing kosync user: {ku['username']}")
+            kosync_user_map[ku["username"]] = kuser
 
         # Seed progress records
         for p in PROGRESS:
-            owner = user_map[p["username"]]
-            result = await session.execute(
-                select(ReadingProgress).where(
-                    ReadingProgress.user_id == owner.id,
-                    ReadingProgress.document == p["document"],
-                )
+            owner = kosync_user_map[p["username"]]
+            record = ReadingProgress(
+                kosync_user_id=owner.id,
+                document=p["document"],
+                progress=p["progress"],
+                percentage=p["percentage"],
+                device=p["device"],
+                device_id=p["device_id"],
+                filename=p.get("filename"),
+                title=p.get("title"),
+                authors=p.get("authors"),
+                is_latest=p.get("is_latest", True),
             )
-            record = result.scalar_one_or_none()
-            if record is None:
-                record = ReadingProgress(
-                    user_id=owner.id,
-                    document=p["document"],
-                    progress=p["progress"],
-                    percentage=p["percentage"],
-                    device=p["device"],
-                    device_id=p["device_id"],
-                    filename=p.get("filename"),
-                    title=p.get("title"),
-                    authors=p.get("authors"),
-                )
-                session.add(record)
-                print(f"  Created progress: {p['title']} for {p['username']}")
-            else:
-                print(f"  Skipped existing progress: {p['title']} for {p['username']}")
+            session.add(record)
+            print(f"  Created progress: {p['title']} for {p['username']}")
 
         await session.commit()
 
