@@ -15,6 +15,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     kosync_users: Mapped[list["KosyncUser"]] = relationship(back_populates="user")
+    ebook_mappings: Mapped[list["AbsEbookMapping"]] = relationship(back_populates="user")
 
 
 class KosyncUser(Base):
@@ -95,3 +96,33 @@ class AlignmentJob(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     library_item: Mapped["AbsLibraryItem"] = relationship(back_populates="alignment_jobs")
+
+
+class AbsEbookMapping(Base):
+    __tablename__ = "abs_ebook_mappings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    abs_item_id: Mapped[str] = mapped_column(String(255), index=True)
+    abs_title: Mapped[str] = mapped_column(String(500))
+    abs_author: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    ebook_path: Mapped[str] = mapped_column(String(1000))
+    ebook_filename: Mapped[str] = mapped_column(String(500))
+    kosync_document: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    user: Mapped["User"] = relationship(back_populates="ebook_mappings")
+
+
+class EbookMetadataCache(Base):
+    __tablename__ = "ebook_metadata_cache"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    path: Mapped[str] = mapped_column(String(1000), unique=True, index=True)
+    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    author: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    file_mtime: Mapped[float] = mapped_column(Float)
+    file_size: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )

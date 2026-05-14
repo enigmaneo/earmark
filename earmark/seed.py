@@ -1,16 +1,90 @@
 import asyncio
 import hashlib
+import json
 
 from sqlalchemy import select
 
 from earmark.database import AsyncSessionLocal, Base, engine, init_db
 from earmark.earmark_auth import hash_password
-from earmark.models import KosyncUser, ReadingProgress, User
+from earmark.models import AbsEbookMapping, AbsLibraryItem, KosyncUser, ReadingProgress, User
 
 
 def md5(value: str) -> str:
     return hashlib.md5(value.encode()).hexdigest()
 
+
+ABS_LIBRARY_ITEMS = [
+    {
+        "abs_item_id": "li_notw",
+        "library_id": "lib_main",
+        "title": "The Name of the Wind",
+        "author": "Patrick Rothfuss",
+        "ebook_filename": "name-of-the-wind.epub",
+        "ebook_format": "epub",
+        "audio_file_count": 40,
+        "total_duration_seconds": 27000.0,
+    },
+    {
+        "abs_item_id": "li_dune",
+        "library_id": "lib_main",
+        "title": "Dune",
+        "author": "Frank Herbert",
+        "ebook_filename": "dune.epub",
+        "ebook_format": "epub",
+        "audio_file_count": 56,
+        "total_duration_seconds": 21600.0,
+    },
+    {
+        "abs_item_id": "li_mistborn",
+        "library_id": "lib_main",
+        "title": "Mistborn",
+        "author": "Brandon Sanderson",
+        "ebook_filename": "mistborn.epub",
+        "ebook_format": "epub",
+        "audio_file_count": 35,
+        "total_duration_seconds": 24600.0,
+    },
+    {
+        "abs_item_id": "li_hyperion",
+        "library_id": "lib_main",
+        "title": "Hyperion",
+        "author": "Dan Simmons",
+        "ebook_filename": "hyperion.epub",
+        "ebook_format": "epub",
+        "audio_file_count": 28,
+        "total_duration_seconds": 18000.0,
+    },
+    {
+        "abs_item_id": "li_foundation",
+        "library_id": "lib_main",
+        "title": "Foundation",
+        "author": "Isaac Asimov",
+        "ebook_filename": "foundation.epub",
+        "ebook_format": "epub",
+        "audio_file_count": 14,
+        "total_duration_seconds": 14400.0,
+    },
+    {
+        "abs_item_id": "li_neuromancer",
+        "library_id": "lib_main",
+        "title": "Neuromancer",
+        "author": "William Gibson",
+        "ebook_filename": "neuromancer.epub",
+        "ebook_format": "epub",
+        "audio_file_count": 22,
+        "total_duration_seconds": 14400.0,
+    },
+    {
+        "abs_item_id": "li_enders_game",
+        "library_id": "lib_main",
+        "title": "Ender's Game",
+        "author": "Orson Scott Card",
+        "ebook_filename": "enders-game.epub",
+        "ebook_format": "epub",
+        "audio_file_count": 19,
+        "total_duration_seconds": 14400.0,
+    },
+]
 
 EARMARK_USERS = [
     {"email": "testuser@example.com", "password": "password"},
@@ -35,6 +109,45 @@ DOC_HYPERION = "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d"
 DOC_FOUNDATION = "aaaabbbbccccddddaaaabbbbccccdddd"
 DOC_NEUROMANCER = "1111222233334444111122223333444"
 DOC_ENDERS_GAME = "abcdef0123456789abcdef0123456789"
+
+ABS_EBOOK_MAPPINGS: list[dict] = [
+    {
+        "earmark_email": "testuser@example.com",
+        "abs_item_id": "li_notw",
+        "abs_title": "The Name of the Wind",
+        "abs_author": "Patrick Rothfuss",
+        "ebook_path": "name-of-the-wind.epub",
+        "ebook_filename": "name-of-the-wind.epub",
+        "kosync_document": DOC_NAME_OF_THE_WIND,
+    },
+    {
+        "earmark_email": "testuser@example.com",
+        "abs_item_id": "li_dune",
+        "abs_title": "Dune",
+        "abs_author": "Frank Herbert",
+        "ebook_path": "dune.epub",
+        "ebook_filename": "dune.epub",
+        "kosync_document": DOC_DUNE,
+    },
+    {
+        "earmark_email": "alice@example.com",
+        "abs_item_id": "li_notw",
+        "abs_title": "The Name of the Wind",
+        "abs_author": "Patrick Rothfuss",
+        "ebook_path": "name-of-the-wind.epub",
+        "ebook_filename": "name-of-the-wind.epub",
+        "kosync_document": DOC_NAME_OF_THE_WIND,
+    },
+    {
+        "earmark_email": "alice@example.com",
+        "abs_item_id": "li_mistborn",
+        "abs_title": "Mistborn",
+        "abs_author": "Brandon Sanderson",
+        "ebook_path": "mistborn.epub",
+        "ebook_filename": "mistborn.epub",
+        "kosync_document": DOC_MISTBORN,
+    },
+]
 
 PROGRESS: list[dict] = [
     # --- testuser: Name of the Wind (3 entries across devices) ---
@@ -394,6 +507,60 @@ async def seed() -> None:
             )
             session.add(record)
             print(f"  Created progress: {p['title']} for {p['username']}")
+
+        # Seed abs_library_items
+        abs_item_map: dict[str, AbsLibraryItem] = {}
+        for li in ABS_LIBRARY_ITEMS:
+            result = await session.execute(
+                select(AbsLibraryItem).where(AbsLibraryItem.abs_item_id == li["abs_item_id"])
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = AbsLibraryItem(
+                    abs_item_id=li["abs_item_id"],
+                    library_id=li["library_id"],
+                    title=li["title"],
+                    author=li.get("author"),
+                    ebook_filename=li.get("ebook_filename"),
+                    ebook_format=li.get("ebook_format"),
+                    audio_file_count=li["audio_file_count"],
+                    total_duration_seconds=li["total_duration_seconds"],
+                    raw_metadata=json.dumps({}),
+                )
+                session.add(row)
+                await session.flush()
+                print(f"  Created abs_library_item: {li['title']}")
+            else:
+                print(f"  Skipped existing abs_library_item: {li['title']}")
+            abs_item_map[li["abs_item_id"]] = row
+
+        # Seed abs_ebook_mappings
+        for m in ABS_EBOOK_MAPPINGS:
+            owner = earmark_user_map.get(m["earmark_email"])
+            if owner is None:
+                continue
+            result = await session.execute(
+                select(AbsEbookMapping).where(
+                    AbsEbookMapping.user_id == owner.id,
+                    AbsEbookMapping.abs_item_id == m["abs_item_id"],
+                    AbsEbookMapping.ebook_path == m["ebook_path"],
+                )
+            )
+            if result.scalar_one_or_none() is None:
+                session.add(
+                    AbsEbookMapping(
+                        user_id=owner.id,
+                        abs_item_id=m["abs_item_id"],
+                        abs_title=m["abs_title"],
+                        abs_author=m.get("abs_author"),
+                        ebook_path=m["ebook_path"],
+                        ebook_filename=m["ebook_filename"],
+                        kosync_document=m.get("kosync_document"),
+                    )
+                )
+                print(f"  Created mapping: {m['abs_title']} → {m['ebook_filename']} ({m['earmark_email']})")
+            else:
+                print(f"  Skipped existing mapping: {m['abs_title']} ({m['earmark_email']})")
 
         await session.commit()
 

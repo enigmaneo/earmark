@@ -102,3 +102,37 @@ class SyncMapEntry(BaseModel):
     audio_end: float
     ebook_pos: str
     text_snippet: str
+
+
+class AbsItemSummary(BaseModel):
+    abs_item_id: str
+    title: str
+    author: str | None = None
+
+
+class EbookFileSummary(BaseModel):
+    path: str
+    filename: str
+    title: str | None = None
+    author: str | None = None
+
+
+class MappingCreate(BaseModel):
+    abs_item_id: str
+    abs_title: str
+    abs_author: str | None = None
+    ebook_path: str
+
+
+class MappingRead(BaseModel):
+    id: int
+    user_id: int
+    abs_item_id: str
+    abs_title: str
+    abs_author: str | None
+    ebook_path: str
+    ebook_filename: str
+    kosync_document: str | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

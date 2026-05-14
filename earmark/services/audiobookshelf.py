@@ -42,5 +42,17 @@ class AudiobookshelfClient:
                 async for chunk in response.aiter_bytes(chunk_size=65536):
                     f.write(chunk)
 
+    async def list_libraries(self) -> list[dict]:  # type: ignore[type-arg]
+        response = await self._client.get("/api/libraries")
+        response.raise_for_status()
+        return response.json().get("libraries", [])  # type: ignore[no-any-return]
+
+    async def list_library_items(self, library_id: str) -> list[dict]:  # type: ignore[type-arg]
+        response = await self._client.get(
+            f"/api/libraries/{library_id}/items", params={"limit": "0"}
+        )
+        response.raise_for_status()
+        return response.json().get("results", [])  # type: ignore[no-any-return]
+
     async def close(self) -> None:
         await self._client.aclose()

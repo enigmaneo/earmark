@@ -13,6 +13,7 @@
 		</AppBar.Lead>
 		{#if data.user}
 			<AppBar.Trail>
+				<a href="/mappings" class="btn btn-sm variant-ghost">Mappings</a>
 				<span class="text-surface-600-400 text-sm">{data.user.email}</span>
 				<a href="/logout" class="btn btn-sm variant-soft">Sign out</a>
 			</AppBar.Trail>

@@ -1,0 +1,24 @@
+meta {
+  name: Create Mapping
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{base_url}}/web/mappings
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+body:json {
+  {
+    "abs_item_id": "{{abs_item_id}}",
+    "abs_title": "Test Book",
+    "abs_author": "Test Author",
+    "ebook_path": "test.epub"
+  }
+}

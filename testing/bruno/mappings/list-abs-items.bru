@@ -1,0 +1,15 @@
+meta {
+  name: List ABS Items
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{base_url}}/web/abs-items
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
