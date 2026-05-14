@@ -40,6 +40,35 @@ EBOOK_LOCAL_ROOT=.
 | `kosync_document` | VARCHAR(64) nullable INDEX | MD5 hex digest of the ebook file content |
 | `created_at` | DATETIME | Server default |
 
+### Table: `ebook_metadata_cache`
+
+Stores extracted metadata for each ebook file so titles are not re-read on every request. Change detection uses the file's modification time and size — if either changes the cache entry is refreshed.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | INTEGER PK | |
+| `path` | VARCHAR(1000) UNIQUE INDEX | Path relative to `ebook_local_root` |
+| `title` | VARCHAR(500) nullable | Extracted from ebook metadata |
+| `author` | VARCHAR(500) nullable | Extracted from ebook metadata |
+| `file_mtime` | FLOAT | `os.path.getmtime` at last cache write |
+| `file_size` | INTEGER | `os.path.getsize` at last cache write |
+| `updated_at` | DATETIME | Server default + onupdate |
+
+```python
+class EbookMetadataCache(Base):
+    __tablename__ = "ebook_metadata_cache"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    path: Mapped[str] = mapped_column(String(1000), unique=True, index=True)
+    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    author: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    file_mtime: Mapped[float] = mapped_column(Float)
+    file_size: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+```
+
 **User scoping:** `user_id` is a FK to `users.id`. All API endpoints filter by the authenticated user — a user can only see and manage their own mappings. This follows the same pattern as `KosyncUser.user_id`.
 
 **Uniqueness:** `(user_id, abs_item_id, ebook_path)` is enforced at the application layer (HTTP 409) rather than as a DB constraint, to avoid migration complexity with SQLite.
@@ -136,20 +165,46 @@ async def list_library_items(self, library_id: str) -> list[dict]:
 
 ### `GET /web/ebook-files`
 
-Recursively scans `ebook_local_root` for ebook files. Uses `asyncio.to_thread` to avoid blocking the event loop.
+Recursively scans `ebook_local_root` for ebook files and returns each file with its extracted title and author. Results are cached in `ebook_metadata_cache` so metadata is only read from disk when a file is new or has changed.
 
 Supported extensions: `.epub`, `.pdf`, `.mobi`, `.azw3`
 
 Returns `[]` if `ebook_local_root` is empty or the directory does not exist.
 
+**Metadata extraction library:** `ebooklib` for EPUB; `pypdf` for PDF. Both are well-known packages that should be added to project dependencies. MOBI/AZW3 do not have a widely supported pure-Python metadata library — fall back to filename for those formats.
+
+**Cache logic (runs in `asyncio.to_thread`):**
+
+```
+for each file found on disk:
+    stat = os.stat(file)
+    cached = lookup ebook_metadata_cache by path
+    if cached and cached.file_mtime == stat.st_mtime and cached.file_size == stat.st_size:
+        use cached.title, cached.author
+    else:
+        extract title/author from file content
+        upsert ebook_metadata_cache row with new mtime/size/title/author
+
+delete ebook_metadata_cache rows whose path is no longer on disk
+```
+
+The upsert and stale-entry cleanup happen in a single DB session after the scan completes.
+
+**Title display fallback:** if no title is found in the file metadata, display the filename instead.
+
 **Response schema: `EbookFileSummary`**
 ```json
 [
-  { "path": "fantasy/name-of-the-wind.epub", "filename": "name-of-the-wind.epub" }
+  {
+    "path": "fantasy/name-of-the-wind.epub",
+    "filename": "name-of-the-wind.epub",
+    "title": "The Name of the Wind",
+    "author": "Patrick Rothfuss"
+  }
 ]
 ```
 
-`path` is always relative to `ebook_local_root`.
+`path` is always relative to `ebook_local_root`. `title` and `author` are `null` if extraction failed.
 
 ---
 
@@ -208,8 +263,10 @@ class AbsItemSummary(BaseModel):
 
 
 class EbookFileSummary(BaseModel):
-    path: str       # relative to ebook_local_root
+    path: str           # relative to ebook_local_root
     filename: str
+    title: str | None = None
+    author: str | None = None
 
 
 class MappingCreate(BaseModel):
@@ -251,6 +308,8 @@ export interface AbsItemSummary {
 export interface EbookFileSummary {
     path: string;
     filename: string;
+    title: string | null;
+    author: string | null;
 }
 
 export interface MappingRead {
@@ -284,9 +343,11 @@ AppBar: earmark | [Mappings]  user@email  Sign out
 ┌───────────────────────────────────────────────────────────────┐
 │ Add Mapping                                                   │
 │                                                               │
-│  ABS Audiobook                   Ebook File                   │
+│  ABS Audiobook                   Ebook                        │
 │  ┌──────────────────────────┐   ┌──────────────────────────┐  │
 │  │ Choose audiobook…      ▾ │   │ Choose ebook…          ▾ │  │
+│  │ Name of the Wind         │   │ The Name of the Wind     │  │
+│  │   — P. Rothfuss          │   │   — P. Rothfuss          │  │
 │  └──────────────────────────┘   └──────────────────────────┘  │
 │                                                    [ Add ]    │
 └───────────────────────────────────────────────────────────────┘
@@ -305,6 +366,7 @@ AppBar: earmark | [Mappings]  user@email  Sign out
 - On successful create, the new row is appended to the table via `use:enhance` without a full page reload.
 - "Remove" deletes the row inline (no confirmation dialog — the mapping can always be recreated).
 - Empty ABS dropdown: single disabled option "No audiobooks found".
+- Ebook dropdown option label: `"{title}" — {author}` when metadata is available, otherwise the filename.
 - Empty ebook dropdown: single disabled option "No ebooks found — check EBOOK_LOCAL_ROOT".
 - Duplicate mapping attempt: inline error message above the form.
 
@@ -350,8 +412,9 @@ Create `testing/bruno/mappings/` with 5 `.bru` files. All use `auth: bearer` wit
 |--------|------|
 | Modify | `earmark/config.py` — change `ebook_local_root` default to `"."` |
 | Modify | `.env` — add `EBOOK_LOCAL_ROOT=.` |
-| Modify | `earmark/models.py` — add `AbsEbookMapping`; add `ebook_mappings` to `User` |
-| Modify | `earmark/schemas.py` — add `AbsItemSummary`, `EbookFileSummary`, `MappingCreate`, `MappingRead` |
+| Modify | `earmark/models.py` — add `AbsEbookMapping`, `EbookMetadataCache`; add `ebook_mappings` to `User` |
+| Modify | `earmark/schemas.py` — add `AbsItemSummary`, `EbookFileSummary` (with `title`/`author`), `MappingCreate`, `MappingRead` |
+| Modify | `pyproject.toml` — add `ebooklib` and `pypdf` dependencies |
 | Modify | `earmark/services/audiobookshelf.py` — add `list_libraries`, `list_library_items` |
 | Create | `earmark/routers/mappings.py` |
 | Modify | `earmark/main.py` — import and register `mappings.router` |
@@ -370,11 +433,13 @@ Create `testing/bruno/mappings/` with 5 `.bru` files. All use `auth: bearer` wit
 ## Verification
 
 1. Set `EBOOK_LOCAL_ROOT=.` in `.env` and place a `.epub` file in the project root.
-2. `uv run fastapi dev earmark/main.py` — confirm `abs_ebook_mappings` table is created and no startup errors occur.
+2. `uv run fastapi dev earmark/main.py` — confirm both new tables (`abs_ebook_mappings`, `ebook_metadata_cache`) are created and no startup errors occur.
 3. Bruno: `list-abs-items` → expect array of audiobooks from ABS (or from local DB if ABS not reachable).
-4. Bruno: `list-ebook-files` → expect the `.epub` file you placed in the root.
-5. Bruno: `create-mapping` → expect `201` with a non-null `kosync_document`.
-6. Bruno: `list-mappings` → expect the new mapping in the response.
-7. Bruno: `delete-mapping` with the returned `id` → expect `{"deleted": N}`.
-8. Browser: navigate to `/mappings` and verify the full create + delete UI flow.
-9. `uv run pytest` — confirm no regressions.
+4. Bruno: `list-ebook-files` → expect the `.epub` with its extracted `title` and `author` (not just the filename). Confirm the `ebook_metadata_cache` table now has a row.
+5. Bruno: `list-ebook-files` again → second call should be fast (cache hit); confirm `updated_at` on the cache row has not changed.
+6. Touch the `.epub` file (`touch test.epub`) and call `list-ebook-files` again → cache should refresh (new `updated_at`).
+7. Bruno: `create-mapping` → expect `201` with a non-null `kosync_document`.
+8. Bruno: `list-mappings` → expect the new mapping in the response.
+9. Bruno: `delete-mapping` with the returned `id` → expect `{"deleted": N}`.
+10. Browser: navigate to `/mappings` — verify ebook dropdown shows titles, not filenames.
+11. `uv run pytest` — confirm no regressions.
