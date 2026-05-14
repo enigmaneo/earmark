@@ -1,7 +1,7 @@
 import pytest
 from httpx import AsyncClient
 
-from tests.conftest import PROGRESS_PAYLOAD
+from conftest import PROGRESS_PAYLOAD
 
 DOC = PROGRESS_PAYLOAD["document"]
 

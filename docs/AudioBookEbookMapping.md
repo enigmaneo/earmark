@@ -16,7 +16,9 @@ This document describes the pipeline that force-aligns an audiobook from Audiobo
 10. [Audio Format Handling](#10-audio-format-handling)
 11. [Aeneas Preparation](#11-aeneas-preparation)
 12. [Forced Alignment](#12-forced-alignment)
+    - [12a. Audio Trimming (Chapter Offset)](#12a-audio-trimming-chapter-offset)
 13. [Final Assembly](#13-final-assembly)
+    - [13a. Chapter-Based Rescaling](#13a-chapter-based-rescaling)
 14. [Output Schema](#14-output-schema)
 15. [Dependencies](#15-dependencies)
 16. [Error Handling](#16-error-handling)
@@ -302,7 +304,8 @@ All downloaded and intermediate files live under `.cache/earmark/` within the pr
     audio/
       001_Chapter01.mp3    ← zero-padded index prefix preserves playback order
       002_Chapter02.mp3
-    concatenated.wav       ← ephemeral; created before aeneas, deleted after
+    concatenated.wav       ← ephemeral; created before trim step, deleted after
+    trimmed.wav            ← ephemeral; chapter-trimmed audio fed to aeneas, deleted after
     ebook.epub
     paragraphs.txt         ← ephemeral; one paragraph per line, fed to aeneas
     sync_map.json          ← durable output artifact
@@ -413,7 +416,7 @@ Merge: fragment[i] → para_{i+1:03d} → index[para_id].ebook_pos
 
 Audiobookshelf commonly stores audiobooks as a folder of MP3 files — one per chapter. aeneas expects a single audio file. Two strategies are supported:
 
-### Strategy A — Concatenate (preferred)
+### Strategy A — Concatenate then trim (preferred)
 
 1. Sort `audioFiles` by their `index` field (ascending).
 2. Write an ffmpeg concat list:
@@ -425,7 +428,11 @@ Audiobookshelf commonly stores audiobooks as a folder of MP3 files — one per c
    ```bash
    ffmpeg -f concat -safe 0 -i filelist.txt -ar 16000 -ac 1 concatenated.wav
    ```
-4. Feed `concatenated.wav` to aeneas. All output timestamps are absolute — no offset arithmetic.
+4. **Trim** the concatenated audio to the first chapter start time (see [§12a Audio Trimming](#12a-audio-trimming-chapter-offset)):
+   ```bash
+   ffmpeg -ss {chapter_start} -i concatenated.wav -ar 16000 -ac 1 trimmed.wav
+   ```
+5. Feed `trimmed.wav` to aeneas.
 
 ### Strategy B — Per-file with offsets (fallback)
 
@@ -534,6 +541,28 @@ task.output_sync_map_file()
 
 The job's `status` is set to `aligning` before this call, and `fragment_count` is set to `len(fragments)` on completion.
 
+### 12a. Audio Trimming (Chapter Offset)
+
+Many audiobooks open with a few seconds of publisher intro, narration of title/author, or music before the first chapter begins. If aeneas receives the full audio including this intro, it forces the early paragraphs of the first chapter to "consume" the intro section, producing timestamps that are systematically too late for all subsequent paragraphs.
+
+**Fix:** trim the audio to the first chapter start before running aeneas.
+
+The first chapter start time is taken from `media.chapters[1]["start"]` in the ABS item metadata (index 1 skips the intro track at index 0). If the chapters list has fewer than 2 entries, no trimming is done.
+
+```python
+chapters = item_metadata["media"]["chapters"]
+chapter_start = float(chapters[1]["start"]) if len(chapters) >= 2 else 0.0
+
+# trim concatenated.wav → trimmed.wav
+ffmpeg.input(str(concat_path), ss=chapter_start) \
+      .output(str(trimmed_path), ar=16000, ac=1, acodec="pcm_s16le") \
+      .run(quiet=True)
+```
+
+aeneas is then run on `trimmed.wav`. Its output timestamps start at 0.0 (relative to the trimmed file). After assembly, `chapter_start` is added to every `audio_start` and `audio_end` value to convert back to absolute audio positions.
+
+**Effect:** without trimming, errors of 15–35 seconds were observed in the first chapter of a tested audiobook. With trimming, errors reduced to 4–5 seconds.
+
 ---
 
 ## 13. Final Assembly
@@ -574,7 +603,26 @@ job.fragment_count = len(fragments)
 job.completed_at = datetime.utcnow()
 ```
 
-Ephemeral files (`concatenated.wav`, `paragraphs.txt`) are deleted after successful assembly.
+Ephemeral files (`concatenated.wav`, `trimmed.wav`, `paragraphs.txt`, `aeneas_raw.json`) are deleted after successful assembly.
+
+### 13a. Chapter-Based Rescaling
+
+Even after trimming, aeneas's DTW alignment tends to absorb inter-paragraph silence into the preceding fragment, causing within-chapter timestamps to drift 2–5 seconds from reality. Chapter-based rescaling corrects this by using ABS chapter boundaries as hard anchors.
+
+**Algorithm:** after building the initial sync map (with `chapter_start` offset applied), group entries by their `DocFragment[N]` spine position. Map each spine position to an ABS chapter using the assumption that `chapters[1]` corresponds to `DocFragment[first_chapter_spine_pos]`, `chapters[2]` to the next spine item, and so on. Then linearly rescale all timestamps within each group to fit exactly within `[chapters[ch_idx]["start"], chapters[ch_idx+1]["start"]]`.
+
+```python
+scale = abs_ch_duration / aeneas_ch_duration
+for entry in chapter_entries:
+    entry["audio_start"] = abs_ch_start + (entry["audio_start"] - aeneas_ch_start) * scale
+    entry["audio_end"]   = abs_ch_start + (entry["audio_end"]   - aeneas_ch_start) * scale
+```
+
+**Assumption:** ABS chapters are granular enough to correspond 1:1 with EPUB spine items. This holds for audiobooks where each chapter is a separate audio file (common for commercially released audiobooks). If ABS has very few coarse chapters, the rescaling is still applied but has less effect.
+
+**Effect:** combined with audio trimming, rescaling reduced per-paragraph timing errors from 4–5 seconds down to ±2 seconds in testing.
+
+**Limitation:** the remaining ±2 second error is inherent DTW drift and cannot be reduced without replacing aeneas with a VAD-based or transformer-based aligner (e.g., WhisperX, wav2vec2-MFA).
 
 ---
 

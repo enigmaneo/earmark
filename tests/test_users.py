@@ -1,6 +1,6 @@
 from httpx import AsyncClient
 
-from tests.conftest import md5
+from conftest import md5
 
 
 async def test_create_user(client: AsyncClient) -> None:

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr
 
 
 class UserCreate(BaseModel):
@@ -74,3 +74,31 @@ class ProgressList(BaseModel):
     total: int
     page: int
     per_page: int
+
+
+class AlignmentJobCreate(BaseModel):
+    abs_item_id: str
+
+
+class AlignmentJobRead(BaseModel):
+    id: int
+    abs_item_id: str
+    status: str
+    error_message: str | None
+    paragraph_count: int | None
+    fragment_count: int | None
+    audio_offset_seconds: float | None
+    sync_map_path: str | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SyncMapEntry(BaseModel):
+    id: str
+    audio_start: float
+    audio_end: float
+    ebook_pos: str
+    text_snippet: str

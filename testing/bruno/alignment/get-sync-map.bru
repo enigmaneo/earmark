@@ -1,0 +1,15 @@
+meta {
+  name: Get Sync Map
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{base_url}}/alignment/jobs/{{job_id}}/sync-map
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}

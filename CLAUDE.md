@@ -21,6 +21,8 @@ Project documentation lives in `docs/`:
 
 - [`docs/KosyncApi.md`](docs/KosyncApi.md) — KOSync API reference
 - [`docs/Frontend.md`](docs/Frontend.md) — Frontend design principles (theming, layout, accessibility)
+- [`docs/AudioBookEbookMapping.md`](docs/AudioBookEbookMapping.md) — Audiobook-ebook mapping and alignment
+- [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) — Alignment pipeline testing guide
 
 ## Rules
 
@@ -33,12 +35,15 @@ Project documentation lives in `docs/`:
 
 ```bash
 uv sync                        # install deps (or: pip install -e ".[dev]")
+bash scripts/install_aeneas.sh # one-time: install aeneas + espeak (alignment pipeline only)
 uv run fastapi dev earmark/main.py   # dev server on :8000
 uv run pytest                  # tests
 uv run ruff check .            # lint
 uv run ruff format .           # format
 uv run mypy earmark            # type check
 ```
+
+> **Note:** `install_aeneas.sh` is only needed if you use the forced-alignment pipeline. It patches `aeneas 1.7.3.0` for numpy 2.x / Python 3.12+ compatibility and installs `espeak`. See [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) for the full testing guide.
 
 ### Frontend (SvelteKit)
 
