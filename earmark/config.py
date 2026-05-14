@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     cwa_url: str = ""
     cwa_username: str = ""
     cwa_password: str = ""
-    ebook_local_root: str = ""
+    ebook_local_root: str = "."
     alignment_cache_dir: str = ".cache/earmark"
 
 
