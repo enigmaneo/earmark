@@ -73,8 +73,11 @@ print(f"    Patched {path}")
 PYEOF
 
 echo "==> Installing aeneas (cew C extension disabled — requires libespeak at link time)..."
-AENEAS_WITH_CEW=False uv run python "$SRC/setup.py" install 2>&1 \
-    | grep -E '^\[|^copying|^creating|^error|^warning|Successfully' || true
+# aeneas's setup.py needs setuptools (for distutils compat on Python 3.12+)
+# and numpy (for include dirs) available at build time. Install setuptools
+# first, then use --no-build-isolation so the venv's numpy is visible.
+uv pip install setuptools
+AENEAS_WITH_CEW=False uv pip install --no-build-isolation "$SRC"
 
 echo "==> Patching installed wavfile.py for numpy 2.x compatibility..."
 WAVFILE=$(uv run python -c "
@@ -83,7 +86,7 @@ print(pathlib.Path(inspect.getfile(m)))
 ")
 
 uv run python - "$WAVFILE" <<'PYEOF'
-import sys
+import sys, pathlib
 
 path = sys.argv[1]
 with open(path) as f:
@@ -96,6 +99,11 @@ src = src.replace(
 
 with open(path, 'w') as f:
     f.write(src)
+
+# Delete any stale .pyc so Python recompiles from the patched source.
+for pyc in pathlib.Path(path).parent.glob('__pycache__/wavfile*.pyc'):
+    pyc.unlink()
+    print(f"    Removed stale {pyc}")
 
 print(f"    Patched {path}")
 PYEOF

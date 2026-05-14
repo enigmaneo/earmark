@@ -87,6 +87,7 @@ class AlignmentJob(Base):
     sync_map_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     paragraph_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fragment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    audio_offset_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()

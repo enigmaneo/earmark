@@ -110,6 +110,33 @@ All downloaded and intermediate files are stored under `.cache/earmark/<item-id>
 
 ---
 
+## Verifying Alignment Accuracy
+
+The sync map preview printed at the end of each run shows the first 10 entries. To verify accuracy against a known audiobook, listen to the audio and note the actual start time of the first few paragraphs, then compare with the generated timestamps.
+
+### Expected accuracy
+
+The pipeline applies two corrections on top of raw aeneas output:
+
+1. **Audio trimming** — the audio is trimmed to the first chapter start before aeneas runs, preventing publisher intros from inflating early paragraph timestamps.
+2. **Chapter-based rescaling** — timestamps are linearly rescaled within each EPUB chapter to match ABS chapter boundaries.
+
+In practice (tested on *Remarkably Bright Creatures*), this produces **±2 second accuracy** at the paragraph level. Raw aeneas without these corrections had errors of 15–35 seconds in the first chapter.
+
+### Manual calibration
+
+To check accuracy for a specific book, listen to the audio around the first few paragraph boundaries and note the actual start times. For example:
+
+```
+"Day 1,299 of My Captivity"    → actually starts at ~29s   (generated: 29.4s ✓)
+"darkness suits me"            → actually starts at ~35s   (generated: 37.0s, ~2s late)
+"Each evening, I await..."     → actually starts at ~39s   (generated: 38.4s, ~0.6s early)
+```
+
+Errors within ±2–3 seconds are expected and acceptable for read-along synchronization. Larger errors (>5s) suggest the ABS chapter data is coarse (few chapters covering many EPUB chapters), which reduces the effectiveness of rescaling.
+
+---
+
 ## Re-running After Failure
 
 Each test run creates a new `AlignmentJob` row. Failed jobs are never modified. Simply re-run the script — if audio is already cached and the ABS timestamp hasn't changed, the download stage is skipped and the pipeline picks up from scratch (it does not resume mid-pipeline).

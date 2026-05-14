@@ -87,6 +87,7 @@ class AlignmentJobRead(BaseModel):
     error_message: str | None
     paragraph_count: int | None
     fragment_count: int | None
+    audio_offset_seconds: float | None
     sync_map_path: str | None
     created_at: datetime
     updated_at: datetime

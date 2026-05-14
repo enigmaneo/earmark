@@ -20,36 +20,86 @@ logger = logging.getLogger(__name__)
 
 # ── synchronous helpers (run via asyncio.to_thread) ────────────────────────────
 
+_BLOCK_TAGS: list[str] = ["p", "h1", "h2", "h3", "h4", "h5", "h6"]
 
-def _parse_epub_sync(epub_path: Path) -> tuple[list[str], dict[str, dict[str, str]]]:
+_FRONT_MATTER_TITLES: frozenset[str] = frozenset({
+    "cover", "title page", "dedication", "contents", "copyright",
+    "preface", "foreword", "acknowledgments", "about the author",
+    "half title", "halftitle",
+})
+
+
+def _find_first_chapter_spine_pos(book: object, spine_items: list[str]) -> int:
+    """Return 1-based spine position of the first non-front-matter TOC entry."""
+    def _scan(items: list) -> int | None:  # type: ignore[type-arg]
+        for item in items:
+            if isinstance(item, tuple):
+                _, children = item
+                result = _scan(children)
+                if result is not None:
+                    return result
+            elif hasattr(item, "href"):
+                if item.title.strip().lower() not in _FRONT_MATTER_TITLES:
+                    href_file = item.href.split("#")[0]
+                    for pos, item_id in enumerate(spine_items, start=1):
+                        spine_item = book.get_item_with_id(item_id)  # type: ignore[union-attr]
+                        if spine_item and (
+                            href_file.endswith(spine_item.file_name)
+                            or spine_item.file_name.endswith(href_file)
+                        ):
+                            return pos
+        return None
+
+    return _scan(book.toc) or 1  # type: ignore[union-attr]
+
+
+def _parse_epub_sync(epub_path: Path) -> tuple[list[str], dict[str, dict[str, str]], int]:
     import ebooklib
     from bs4 import BeautifulSoup
     from ebooklib import epub
 
-    book = epub.read_epub(str(epub_path), options={"ignore_ncx": True})
+    book = epub.read_epub(str(epub_path))
     spine_items = [item_id for item_id, _ in book.spine]
 
     paragraphs: list[str] = []
     index: dict[str, dict[str, str]] = {}
     seq = 0
 
+    first_chapter_spine_pos = _find_first_chapter_spine_pos(book, spine_items)
+
     for spine_pos, item_id in enumerate(spine_items, start=1):
+        if spine_pos < first_chapter_spine_pos:
+            continue
         item = book.get_item_with_id(item_id)
         if item is None or item.get_type() != ebooklib.ITEM_DOCUMENT:
             continue
         soup = BeautifulSoup(item.get_content(), "html.parser")
-        p_tags = soup.find_all("p")
-        for p_pos, p_tag in enumerate(p_tags, start=1):
-            text = p_tag.get_text(separator=" ").strip()
+        # Skip table-of-contents pages — they're not narrated in audiobooks.
+        if soup.find(attrs={"role": "doc-toc"}):
+            continue
+        tag_counters: dict[str, int] = {}
+        for element in soup.find_all(_BLOCK_TAGS):
+            text = element.get_text(separator=" ").strip()
             if not text:
                 continue
+            tag_name = element.name
+            tag_counters[tag_name] = tag_counters.get(tag_name, 0) + 1
             para_id = f"para_{seq:03d}"
-            ebook_pos = f"/body/DocFragment[{spine_pos}]/body/p[{p_pos}]"
+            ebook_pos = f"/body/DocFragment[{spine_pos}]/body/{tag_name}[{tag_counters[tag_name]}]"
             index[para_id] = {"text": text, "ebook_pos": ebook_pos}
             paragraphs.append(text)
             seq += 1
 
-    return paragraphs, index
+    return paragraphs, index, first_chapter_spine_pos
+
+
+def _ffmpeg_trim_sync(input_path: Path, output_path: Path, start: float) -> None:
+    (
+        ffmpeg.input(str(input_path), ss=start)
+        .output(str(output_path), ar=16000, ac=1, acodec="pcm_s16le")
+        .overwrite_output()
+        .run(quiet=True)
+    )
 
 
 def _ffmpeg_concat_sync(audio_files: list[Path], output_path: Path) -> None:
@@ -95,6 +145,72 @@ def _run_aeneas_sync(
     return data["fragments"]  # type: ignore[no-any-return]
 
 
+def _rescale_to_chapters(
+    sync_map: list[dict],  # type: ignore[type-arg]
+    chapters: list[dict],  # type: ignore[type-arg]
+    first_chapter_spine_pos: int,
+) -> None:
+    """Linearly rescale aeneas timestamps within each EPUB chapter to match ABS chapter boundaries.
+
+    Assumes ABS chapters[1], chapters[2], ... correspond to EPUB DocFragment[first_chapter_spine_pos],
+    DocFragment[first_chapter_spine_pos+1], etc. (one ABS chapter per spine item).
+    Entries whose spine position doesn't map to a valid chapter index are left unchanged.
+    """
+    import re
+
+    if len(chapters) < 2:
+        return
+
+    logger.info(
+        "Chapter rescaling: %d ABS chapters, first_chapter_spine_pos=%d",
+        len(chapters),
+        first_chapter_spine_pos,
+    )
+
+    def _spine_pos(ebook_pos: str) -> int | None:
+        m = re.match(r"/body/DocFragment\[(\d+)\]/", ebook_pos)
+        return int(m.group(1)) if m else None
+
+    # Group sync_map entry indices by spine position
+    groups: dict[int, list[int]] = {}
+    for i, entry in enumerate(sync_map):
+        sp = _spine_pos(entry["ebook_pos"])
+        if sp is not None:
+            groups.setdefault(sp, []).append(i)
+
+    for spine_pos in sorted(groups.keys()):
+        indices = groups[spine_pos]
+        ch_idx = spine_pos - first_chapter_spine_pos + 1
+        if ch_idx < 1 or ch_idx >= len(chapters):
+            continue
+
+        abs_ch_start = float(chapters[ch_idx]["start"])
+        abs_ch_end = (
+            float(chapters[ch_idx + 1]["start"])
+            if ch_idx + 1 < len(chapters)
+            else sync_map[indices[-1]]["audio_end"]
+        )
+
+        aeneas_ch_start = sync_map[indices[0]]["audio_start"]
+        aeneas_ch_end = sync_map[indices[-1]]["audio_end"]
+        aeneas_duration = aeneas_ch_end - aeneas_ch_start
+        abs_duration = abs_ch_end - abs_ch_start
+
+        if aeneas_duration <= 0 or abs_duration <= 0:
+            continue
+
+        scale = abs_duration / aeneas_duration
+        logger.debug(
+            "DocFragment[%d] → chapter %d: aeneas [%.2f, %.2f] → abs [%.2f, %.2f] (scale=%.3f)",
+            spine_pos, ch_idx, aeneas_ch_start, aeneas_ch_end, abs_ch_start, abs_ch_end, scale,
+        )
+
+        for i in indices:
+            e = sync_map[i]
+            e["audio_start"] = abs_ch_start + (e["audio_start"] - aeneas_ch_start) * scale
+            e["audio_end"] = abs_ch_start + (e["audio_end"] - aeneas_ch_start) * scale
+
+
 # ── pipeline class ──────────────────────────────────────────────────────────────
 
 
@@ -110,12 +226,17 @@ class AlignmentPipeline:
             cache_dir = self._cache_dir()
             cache_dir.mkdir(parents=True, exist_ok=True)
 
+            chapters = item_metadata.get("media", {}).get("chapters", [])
+            chapter_start = float(chapters[1]["start"]) if len(chapters) >= 2 else 0.0
+
             audio_dir = await self._download_audio_files(cache_dir, item_metadata)
             ebook_path = await self._download_ebook(cache_dir, item_metadata)
-            paragraphs, index = await self._parse_epub(ebook_path)
-            audio_path = await self._prepare_audio(audio_dir)
+            paragraphs, index, first_chapter_spine_pos = await self._parse_epub(ebook_path)
+            audio_path = await self._prepare_audio(audio_dir, chapter_start)
             fragments = await self._run_aeneas(cache_dir, audio_path, paragraphs)
-            await self._assemble_sync_map(cache_dir, fragments, index)
+            await self._assemble_sync_map(
+                cache_dir, fragments, index, chapter_start, chapters, first_chapter_spine_pos
+            )
         except Exception as exc:
             logger.exception("Alignment job %d failed", self.job.id)
             await self._fail(str(exc))
@@ -372,28 +493,33 @@ class AlignmentPipeline:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(best_path, dest)
 
-    async def _parse_epub(self, epub_path: Path) -> tuple[list[str], dict[str, dict[str, str]]]:
+    async def _parse_epub(self, epub_path: Path) -> tuple[list[str], dict[str, dict[str, str]], int]:
         await self._update_status("parsing_epub")
-        paragraphs, index = await asyncio.to_thread(_parse_epub_sync, epub_path)
+        paragraphs, index, first_chapter_spine_pos = await asyncio.to_thread(_parse_epub_sync, epub_path)
         await self._update_status("parsing_epub", paragraph_count=len(paragraphs))
-        return paragraphs, index
+        return paragraphs, index, first_chapter_spine_pos
 
-    async def _prepare_audio(self, audio_dir: Path) -> Path:
+    async def _prepare_audio(self, audio_dir: Path, trim_start: float = 0.0) -> Path:
         audio_files = sorted(audio_dir.glob("*"))
         audio_files = [f for f in audio_files if f.is_file()]
-        output_path = audio_dir.parent / "concatenated.wav"
+        concat_path = audio_dir.parent / "concatenated.wav"
+        trimmed_path = audio_dir.parent / "trimmed.wav"
 
         if len(audio_files) == 1 and audio_files[0].suffix.lower() in (".mp3", ".m4b", ".m4a"):
-            return audio_files[0]
+            src = audio_files[0]
+        else:
+            try:
+                await asyncio.to_thread(_ffmpeg_concat_sync, audio_files, concat_path)
+            except Exception as exc:
+                logger.warning("Strategy A (concat) failed: %s — falling back to per-file", exc)
+                raise
+            src = concat_path
 
-        try:
-            await asyncio.to_thread(_ffmpeg_concat_sync, audio_files, output_path)
-        except Exception as exc:
-            logger.warning("Strategy A (concat) failed: %s — falling back to per-file", exc)
-            # Strategy B not implemented; re-raise for now
-            raise
+        if trim_start > 0.0:
+            await asyncio.to_thread(_ffmpeg_trim_sync, src, trimmed_path, trim_start)
+            return trimmed_path
 
-        return output_path
+        return src
 
     async def _run_aeneas(
         self,
@@ -419,6 +545,9 @@ class AlignmentPipeline:
         cache_dir: Path,
         fragments: list[dict[str, str]],
         index: dict[str, dict[str, str]],
+        chapter_start: float,
+        chapters: list[dict],  # type: ignore[type-arg]
+        first_chapter_spine_pos: int,
     ) -> None:
         await self._update_status("assembling")
 
@@ -444,12 +573,17 @@ class AlignmentPipeline:
             sync_map.append(
                 {
                     "id": para_id,
-                    "audio_start": float(fragment["begin"]),
-                    "audio_end": float(fragment["end"]),
+                    "audio_start": float(fragment["begin"]) + chapter_start,
+                    "audio_end": float(fragment["end"]) + chapter_start,
                     "ebook_pos": entry["ebook_pos"],
                     "text_snippet": entry["text"],
                 }
             )
+
+        if chapter_start > 0.0:
+            logger.info("Applied chapter start offset %.2fs to all sync map entries", chapter_start)
+
+        _rescale_to_chapters(sync_map, chapters, first_chapter_spine_pos)
 
         sync_map_path = cache_dir / "sync_map.json"
         sync_map_path.write_text(
@@ -457,7 +591,7 @@ class AlignmentPipeline:
         )
 
         # Clean up ephemeral files
-        for ephemeral in ["concatenated.wav", "paragraphs.txt", "aeneas_raw.json"]:
+        for ephemeral in ["concatenated.wav", "trimmed.wav", "paragraphs.txt", "aeneas_raw.json"]:
             (cache_dir / ephemeral).unlink(missing_ok=True)
 
         await self._update_status(
@@ -465,6 +599,7 @@ class AlignmentPipeline:
             sync_map_path=str(sync_map_path),
             fragment_count=frag_count,
             paragraph_count=para_count,
+            audio_offset_seconds=chapter_start if chapter_start > 0.0 else None,
             completed_at=datetime.now(tz=UTC),
         )
 

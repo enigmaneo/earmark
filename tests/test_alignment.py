@@ -1,3 +1,4 @@
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,10 @@ ABS_METADATA: dict[str, Any] = {
                 "duration": 100.0,
             },
         ],
+        "chapters": [
+            {"id": 0, "start": 0.0, "end": 10.0, "title": "Intro"},
+            {"id": 1, "start": 10.0, "end": 100.0, "title": "Content"},
+        ],
         "ebookFile": {"filename": "test.epub", "ext": ".epub"},
     },
 }
@@ -57,11 +62,13 @@ async def _run_pipeline(
     job_id: int,
     session_factory: async_sessionmaker,  # type: ignore[type-arg]
     cache_dir: Path,
+    abs_metadata_override: dict[str, Any] | None = None,
 ) -> None:
     """Run the full pipeline with all blocking calls mocked."""
+    metadata = abs_metadata_override if abs_metadata_override is not None else ABS_METADATA
 
     async def fake_get_item(self: Any, item_id: str) -> dict[str, Any]:
-        return ABS_METADATA
+        return metadata
 
     async def fake_download_audio(self: Any, item_id: str, filename: str, dest: Path) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -71,8 +78,8 @@ async def _run_pipeline(
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"fake_epub")
 
-    def fake_parse_epub(epub_path: Path) -> tuple[list[str], dict[str, dict[str, str]]]:
-        return FAKE_PARAGRAPHS, FAKE_INDEX
+    def fake_parse_epub(epub_path: Path) -> tuple[list[str], dict[str, dict[str, str]], int]:
+        return FAKE_PARAGRAPHS, FAKE_INDEX, 1
 
     def fake_ffmpeg_concat(audio_files: list[Path], output_path: Path) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -202,8 +209,35 @@ async def test_full_pipeline_happy_path(
     entries = resp.json()
     assert len(entries) == 2
     assert entries[0]["id"] == "para_000"
-    assert entries[0]["audio_start"] == 0.0
+    assert entries[0]["audio_start"] == 10.0  # 0.0 + 10.0 offset from chapter[1].start
     assert entries[0]["ebook_pos"] == "/body/DocFragment[1]/body/p[1]"
+
+    resp = await client.get(f"/alignment/jobs/{job_id}", headers=jwt_headers)
+    assert resp.json()["audio_offset_seconds"] == 10.0
+
+
+async def test_pipeline_no_offset_without_chapters(
+    client: AsyncClient,
+    jwt_headers: dict[str, str],
+    db_session_factory: async_sessionmaker,  # type: ignore[type-arg]
+    tmp_path: Path,
+) -> None:
+    metadata_no_chapters = copy.deepcopy(ABS_METADATA)
+    del metadata_no_chapters["media"]["chapters"]
+
+    resp = await client.post(
+        "/alignment/jobs", json={"abs_item_id": ABS_ITEM_ID}, headers=jwt_headers
+    )
+    job_id = resp.json()["id"]
+
+    await _run_pipeline(job_id, db_session_factory, tmp_path, abs_metadata_override=metadata_no_chapters)
+
+    resp = await client.get(f"/alignment/jobs/{job_id}/sync-map", headers=jwt_headers)
+    entries = resp.json()
+    assert entries[0]["audio_start"] == 0.0
+
+    resp = await client.get(f"/alignment/jobs/{job_id}", headers=jwt_headers)
+    assert resp.json()["audio_offset_seconds"] is None
 
 
 async def test_pipeline_fails_on_abs_error(
