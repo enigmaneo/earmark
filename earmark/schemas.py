@@ -138,6 +138,7 @@ class MappingRead(BaseModel):
     alignment_job_id: int | None = None
     sync_status: str | None = None
     sync_progress: int | None = None
+    sync_error: str | None = None
     cache_intact: bool | None = None
 
     model_config = ConfigDict(from_attributes=True)

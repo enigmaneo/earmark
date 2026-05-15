@@ -47,6 +47,7 @@ def _mapping_to_schema(m: AbsEbookMapping, lib_item: AbsLibraryItem | None) -> M
         alignment_job_id=job.id if job else None,
         sync_status=job.status if job else None,
         sync_progress=job.progress if job else None,
+        sync_error=job.error_message if job else None,
         cache_intact=_check_cache_intact(m.abs_item_id, lib_item),
     )
 

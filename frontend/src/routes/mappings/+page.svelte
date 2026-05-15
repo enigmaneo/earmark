@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import type { AbsItemSummary, EbookFileSummary, MappingRead } from '$lib/api';
@@ -53,10 +54,18 @@
 
 	$effect(() => {
 		const updated = data.mappings;
-		mappings = updated;
-		if (updated.some((m) => m.sync_status && ACTIVE_STATUSES.has(m.sync_status))) {
-			startPolling();
-		}
+		untrack(() => {
+			for (const m of updated) {
+				const prev = mappings.find((p) => p.id === m.id);
+				if (m.sync_status === 'failed' && prev && ACTIVE_STATUSES.has(prev.sync_status ?? '')) {
+					toaster.create({ type: 'error', title: `Alignment failed for "${m.abs_title}"` });
+				}
+			}
+			mappings = updated;
+			if (updated.some((m) => m.sync_status && ACTIVE_STATUSES.has(m.sync_status))) {
+				startPolling();
+			}
+		});
 		return () => {
 			if (pollTimer) {
 				clearInterval(pollTimer);
@@ -185,7 +194,9 @@
 							{/if}
 						</td>
 						<td class="min-w-[140px]">
-							{#if m.sync_progress != null}
+							{#if m.sync_status === 'failed'}
+								<span class="badge variant-filled-error text-xs" title={m.sync_error ?? undefined}>Failed</span>
+							{:else if m.sync_progress != null}
 								<div class="flex items-center gap-2">
 									<div class="bg-surface-300 h-2 flex-1 overflow-hidden rounded-full">
 										<div
