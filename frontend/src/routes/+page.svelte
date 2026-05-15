@@ -69,6 +69,9 @@
 </script>
 
 <div class="container mx-auto p-6 space-y-4">
+	{#if data.loadError}
+		<aside class="alert variant-filled-error"><p>{data.loadError}</p></aside>
+	{/if}
 	<div class="flex items-center gap-4">
 		<label for="doc-select" class="text-sm font-medium">Filter by title</label>
 		<select

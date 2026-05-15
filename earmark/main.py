@@ -1,13 +1,31 @@
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from earmark.config import settings
 from earmark.database import init_db
 from earmark.routers import alignment, auth, mappings, progress, users
 from earmark.routers.progress import web_router
 from earmark.scheduler import start_scheduler, stop_scheduler
+
+
+def _configure_logging() -> None:
+    if settings.log_pretty:
+        from rich.logging import RichHandler
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(message)s",
+            datefmt="[%X]",
+            handlers=[RichHandler(rich_tracebacks=True)],
+        )
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+
+_configure_logging()
 
 
 @asynccontextmanager

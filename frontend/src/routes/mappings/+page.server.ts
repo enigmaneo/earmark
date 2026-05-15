@@ -8,25 +8,43 @@ export const load: PageServerLoad = async ({ cookies }): Promise<{
 	absItems: AbsItemSummary[];
 	ebookFiles: EbookFileSummary[];
 	mappings: MappingRead[];
+	loadError: string | null;
 }> => {
 	const token = cookies.get('earmark_session');
 	if (!token) redirect(302, '/login');
 
 	const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
-	const [absItemsRes, ebookFilesRes, mappingsRes] = await Promise.all([
-		fetch(`${BACKEND}/web/abs-items`, { headers }),
-		fetch(`${BACKEND}/web/ebook-files`, { headers }),
-		fetch(`${BACKEND}/web/mappings`, { headers }),
-	]);
+	try {
+		const [absItemsRes, ebookFilesRes, mappingsRes] = await Promise.all([
+			fetch(`${BACKEND}/web/abs-items`, { headers }),
+			fetch(`${BACKEND}/web/ebook-files`, { headers }),
+			fetch(`${BACKEND}/web/mappings`, { headers }),
+		]);
 
-	const [absItems, ebookFiles, mappings] = await Promise.all([
-		absItemsRes.json(),
-		ebookFilesRes.json(),
-		mappingsRes.json(),
-	]);
+		if (!absItemsRes.ok) {
+			const body = await absItemsRes.json().catch(() => ({}));
+			return { absItems: [], ebookFiles: [], mappings: [], loadError: body.detail ?? 'Failed to load audiobooks' };
+		}
+		if (!ebookFilesRes.ok) {
+			const body = await ebookFilesRes.json().catch(() => ({}));
+			return { absItems: [], ebookFiles: [], mappings: [], loadError: body.detail ?? 'Failed to load ebook files' };
+		}
+		if (!mappingsRes.ok) {
+			const body = await mappingsRes.json().catch(() => ({}));
+			return { absItems: [], ebookFiles: [], mappings: [], loadError: body.detail ?? 'Failed to load mappings' };
+		}
 
-	return { absItems, ebookFiles, mappings };
+		const [absItems, ebookFiles, mappings] = await Promise.all([
+			absItemsRes.json(),
+			ebookFilesRes.json(),
+			mappingsRes.json(),
+		]);
+
+		return { absItems, ebookFiles, mappings, loadError: null };
+	} catch {
+		return { absItems: [], ebookFiles: [], mappings: [], loadError: 'Failed to load page data' };
+	}
 };
 
 export const actions: Actions = {

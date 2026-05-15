@@ -3,6 +3,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import type { AbsItemSummary, EbookFileSummary, MappingRead } from '$lib/api';
 	import type { ActionData, PageData } from './$types';
+	import { toaster } from '$lib/toaster';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -68,6 +69,10 @@
 <div class="container mx-auto max-w-5xl space-y-8 p-6">
 	<h1 class="h2">ABS–Ebook Mappings</h1>
 
+	{#if data.loadError}
+		<aside class="alert variant-filled-error"><p>{data.loadError}</p></aside>
+	{/if}
+
 	<div class="card bg-surface-100-900 space-y-4 p-6">
 		<h2 class="h3">Add Mapping</h2>
 
@@ -86,6 +91,7 @@
 						mappings = [result.data.created as MappingRead, ...mappings];
 						selectedAbsItemId = '';
 						selectedEbookPath = '';
+						toaster.create({ type: 'success', title: 'Mapping added' });
 					} else {
 						await update();
 					}
@@ -204,7 +210,10 @@
 											const synced = result.data.synced as MappingRead;
 											mappings = mappings.map((x) => (x.id === synced.id ? synced : x));
 											startPolling();
+											toaster.create({ type: 'success', title: 'Sync started' });
 										} else {
+											const msg = result.type === 'failure' ? (result.data?.error as string | undefined) : undefined;
+											toaster.create({ type: 'error', title: msg ?? 'Sync failed' });
 											await update();
 										}
 									};
@@ -225,6 +234,8 @@
 												(x) => x.id !== (result.data?.deleted as number)
 											);
 										} else {
+											const msg = result.type === 'failure' ? (result.data?.error as string | undefined) : undefined;
+											toaster.create({ type: 'error', title: msg ?? 'Delete failed' });
 											await update();
 										}
 									};

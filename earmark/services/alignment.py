@@ -316,9 +316,10 @@ class AlignmentPipeline:
                         self.job.abs_item_id, ino, dest
                     )
                     break
-                except httpx.HTTPError:
+                except httpx.HTTPError as exc:
                     if attempt == 2:
                         raise
+                    logger.warning("Audio download attempt %d/3 failed: %s", attempt + 1, exc)
                     await asyncio.sleep(2**attempt)
 
         await self._update_status("fetching_audio", progress=20, audio_cache_dir=str(audio_dir))
@@ -375,9 +376,10 @@ class AlignmentPipeline:
             try:
                 await self._abs.download_ebook(self.job.abs_item_id, dest)
                 return
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
                 if attempt == 2:
                     raise
+                logger.warning("Ebook download attempt %d/3 failed: %s", attempt + 1, exc)
                 await asyncio.sleep(2**attempt)
 
     async def _download_ebook_from_cwa(

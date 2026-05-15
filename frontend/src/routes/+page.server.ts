@@ -15,20 +15,50 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
 
 	const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
-	const [documents, progressList] = await Promise.all([
-		fetch(`${BACKEND}/web/documents`, { headers }).then((r) => r.json()),
-		fetch(
-			`${BACKEND}/web/progress?${new URLSearchParams({
-				...(document ? { document } : {}),
+	try {
+		const [documentsRes, progressRes] = await Promise.all([
+			fetch(`${BACKEND}/web/documents`, { headers }),
+			fetch(
+				`${BACKEND}/web/progress?${new URLSearchParams({
+					...(document ? { document } : {}),
+					sort_by,
+					sort_dir,
+					page: String(page),
+				})}`,
+				{ headers }
+			),
+		]);
+
+		if (!documentsRes.ok || !progressRes.ok) {
+			const failed = !documentsRes.ok ? 'documents' : 'progress';
+			return {
+				documents: [],
+				progressList: { data: [], total: 0 },
+				document,
 				sort_by,
 				sort_dir,
-				page: String(page),
-			})}`,
-			{ headers }
-		).then((r) => r.json()),
-	]);
+				page,
+				loadError: `Failed to load ${failed} data`,
+			};
+		}
 
-	return { documents, progressList, document, sort_by, sort_dir, page };
+		const [documents, progressList] = await Promise.all([
+			documentsRes.json(),
+			progressRes.json(),
+		]);
+
+		return { documents, progressList, document, sort_by, sort_dir, page, loadError: null };
+	} catch {
+		return {
+			documents: [],
+			progressList: { data: [], total: 0 },
+			document,
+			sort_by,
+			sort_dir,
+			page,
+			loadError: 'Failed to load data',
+		};
+	}
 };
 
 export const actions: Actions = {

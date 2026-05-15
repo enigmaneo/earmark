@@ -8,14 +8,14 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from earmark.config import settings
-
-logger = logging.getLogger(__name__)
 from earmark.database import get_session
 from earmark.earmark_auth import get_current_earmark_user
 from earmark.models import AbsEbookMapping, AbsLibraryItem, AlignmentJob, EbookMetadataCache, User
 from earmark.schemas import AbsItemSummary, EbookFileSummary, MappingCreate, MappingRead
 from earmark.services.alignment import run_alignment_job
 from earmark.services.audiobookshelf import AudiobookshelfClient
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/web", tags=["mappings"])
 
@@ -64,6 +64,7 @@ def _extract_epub_metadata(path: Path) -> tuple[str | None, str | None]:
             author[0][0] if author else None,
         )
     except Exception:
+        logger.warning("Failed to extract EPUB metadata from %s", path, exc_info=True)
         return None, None
 
 
@@ -77,6 +78,7 @@ def _extract_pdf_metadata(path: Path) -> tuple[str | None, str | None]:
             return None, None
         return info.title or None, info.author or None
     except Exception:
+        logger.warning("Failed to extract PDF metadata from %s", path, exc_info=True)
         return None, None
 
 
@@ -109,6 +111,9 @@ async def list_abs_items(
                 await client.close()
         except Exception:
             logger.error("Failed to fetch library items from Audiobookshelf", exc_info=True)
+            raise HTTPException(
+                status_code=503, detail="Failed to fetch library items from Audiobookshelf"
+            )
 
     result = await session.execute(select(AbsLibraryItem).order_by(AbsLibraryItem.title))
     rows = result.scalars().all()
@@ -144,6 +149,7 @@ async def list_ebook_files(
             try:
                 stat = file.stat()
             except OSError:
+                logger.debug("Cannot stat %s, skipping", file)
                 continue
             path_rel = file.relative_to(root).as_posix()
             cached = cache.get(path_rel)
@@ -256,7 +262,8 @@ async def create_mapping(
         content = await asyncio.to_thread(full_path.read_bytes)
         kosync_document = hashlib.md5(content).hexdigest()
     except OSError:
-        pass
+        logger.error("Cannot read ebook file: %s", full_path, exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not read ebook file")
 
     mapping = AbsEbookMapping(
         user_id=user.id,
