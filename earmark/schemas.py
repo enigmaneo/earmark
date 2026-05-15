@@ -84,6 +84,7 @@ class AlignmentJobRead(BaseModel):
     id: int
     abs_item_id: str
     status: str
+    progress: int = 0
     error_message: str | None
     paragraph_count: int | None
     fragment_count: int | None
@@ -134,5 +135,9 @@ class MappingRead(BaseModel):
     ebook_filename: str
     kosync_document: str | None
     created_at: datetime
+    alignment_job_id: int | None = None
+    sync_status: str | None = None
+    sync_progress: int | None = None
+    cache_intact: bool | None = None
 
     model_config = ConfigDict(from_attributes=True)

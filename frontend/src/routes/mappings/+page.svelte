@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import type { AbsItemSummary, EbookFileSummary, MappingRead } from '$lib/api';
 	import type { ActionData, PageData } from './$types';
 
@@ -22,12 +23,48 @@
 		return new Date(iso).toLocaleDateString();
 	}
 
+	const ACTIVE_STATUSES = new Set([
+		'pending',
+		'fetching_audio',
+		'fetching_ebook',
+		'parsing_epub',
+		'aligning',
+		'assembling'
+	]);
+
+	let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+	function startPolling() {
+		if (pollTimer) return;
+		pollTimer = setInterval(async () => {
+			if (!mappings.some((m) => m.sync_status && ACTIVE_STATUSES.has(m.sync_status))) {
+				clearInterval(pollTimer!);
+				pollTimer = null;
+				return;
+			}
+			await invalidateAll();
+		}, 2000);
+	}
+
+	let anyActive = $derived(
+		mappings.some((m) => m.sync_status && ACTIVE_STATUSES.has(m.sync_status))
+	);
+
 	$effect(() => {
 		mappings = data.mappings;
+		if (mappings.some((m) => m.sync_status && ACTIVE_STATUSES.has(m.sync_status))) {
+			startPolling();
+		}
+		return () => {
+			if (pollTimer) {
+				clearInterval(pollTimer);
+				pollTimer = null;
+			}
+		};
 	});
 </script>
 
-<div class="container mx-auto max-w-4xl space-y-8 p-6">
+<div class="container mx-auto max-w-5xl space-y-8 p-6">
 	<h1 class="h2">ABS–Ebook Mappings</h1>
 
 	<div class="card bg-surface-100-900 space-y-4 p-6">
@@ -113,6 +150,8 @@
 					<th>Audiobook</th>
 					<th>Author</th>
 					<th>KOSync Hash</th>
+					<th>Cache</th>
+					<th>Progress</th>
 					<th>Created</th>
 					<th></th>
 				</tr>
@@ -129,8 +168,52 @@
 								—
 							{/if}
 						</td>
-						<td>{formatDate(m.created_at)}</td>
 						<td>
+							{#if m.cache_intact === true}
+								<span class="badge variant-filled-success text-xs">Cached</span>
+							{:else if m.cache_intact === false}
+								<span class="badge variant-filled-warning text-xs">Stale</span>
+							{:else}
+								<span class="text-surface-400 text-xs">—</span>
+							{/if}
+						</td>
+						<td class="min-w-[140px]">
+							{#if m.sync_progress != null}
+								<div class="flex items-center gap-2">
+									<div class="bg-surface-300 h-2 flex-1 overflow-hidden rounded-full">
+										<div
+											class="bg-primary-500 h-2 rounded-full transition-all duration-500"
+											style="width: {m.sync_progress}%"
+										></div>
+									</div>
+									<span class="w-8 text-right text-xs tabular-nums">{m.sync_progress}%</span>
+								</div>
+							{:else}
+								<span class="text-surface-400 text-xs">—</span>
+							{/if}
+						</td>
+						<td>{formatDate(m.created_at)}</td>
+						<td class="flex gap-2">
+							<form
+								method="POST"
+								action="?/syncMapping"
+								use:enhance={() => {
+									return async ({ result, update }) => {
+										if (result.type === 'success' && result.data?.synced) {
+											const synced = result.data.synced as MappingRead;
+											mappings = mappings.map((x) => (x.id === synced.id ? synced : x));
+											startPolling();
+										} else {
+											await update();
+										}
+									};
+								}}
+							>
+								<input type="hidden" name="id" value={m.id} />
+								<button type="submit" class="btn btn-sm variant-ghost-primary" disabled={anyActive}>
+									{m.sync_status === 'complete' || m.sync_status === 'failed' ? 'Re-sync' : 'Sync'}
+								</button>
+							</form>
 							<form
 								method="POST"
 								action="?/deleteMapping"
@@ -153,7 +236,7 @@
 					</tr>
 				{:else}
 					<tr>
-						<td colspan="6" class="text-center text-surface-500">
+						<td colspan="8" class="text-center text-surface-500">
 							No mappings yet. Add one above.
 						</td>
 					</tr>

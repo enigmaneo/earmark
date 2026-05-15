@@ -72,4 +72,23 @@ export const actions: Actions = {
 		if (!res.ok) return fail(res.status, { error: 'Delete failed' });
 		return { deleted: id };
 	},
+
+	syncMapping: async ({ request, cookies }) => {
+		const token = cookies.get('earmark_session');
+		if (!token) return fail(401, { error: 'Not authenticated' });
+
+		const formData = await request.formData();
+		const id = Number(formData.get('id'));
+
+		const res = await fetch(`${BACKEND}/web/mappings/${id}/sync`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${token}` },
+		});
+
+		if (res.status === 409) return fail(409, { error: 'Another sync is already running' });
+		if (!res.ok) return fail(res.status, { error: 'Sync failed to start' });
+
+		const mapping = (await res.json()) as MappingRead;
+		return { synced: mapping };
+	},
 };
