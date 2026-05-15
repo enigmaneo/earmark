@@ -110,7 +110,11 @@ async def list_abs_items(
             finally:
                 await client.close()
         except Exception:
-            logger.error("Failed to fetch library items from Audiobookshelf", exc_info=True)
+            logger.error(
+                "Failed to fetch library items from Audiobookshelf at %s",
+                settings.audiobookshelf_url,
+                exc_info=True,
+            )
             raise HTTPException(
                 status_code=503, detail="Failed to fetch library items from Audiobookshelf"
             )
