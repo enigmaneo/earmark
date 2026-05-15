@@ -36,6 +36,6 @@ export const actions: Actions = {
 			sameSite: 'lax'
 		});
 
-		redirect(302, '/');
+		redirect(302, '/mappings');
 	}
 };

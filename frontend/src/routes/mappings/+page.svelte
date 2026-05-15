@@ -125,7 +125,11 @@
 						<td class="max-w-xs truncate">{m.abs_author ?? '—'}</td>
 						<td class="max-w-xs truncate font-mono text-sm">{m.ebook_filename}</td>
 						<td class="font-mono text-xs">
-							{m.kosync_document ? m.kosync_document.slice(0, 8) + '…' : '—'}
+							{#if m.kosync_document}
+								<a href="/?document={m.kosync_document}" class="anchor">{m.kosync_document.slice(0, 8)}…</a>
+							{:else}
+								—
+							{/if}
 						</td>
 						<td>{formatDate(m.created_at)}</td>
 						<td>
