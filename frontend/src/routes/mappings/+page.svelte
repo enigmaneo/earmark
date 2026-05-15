@@ -51,8 +51,9 @@
 	);
 
 	$effect(() => {
-		mappings = data.mappings;
-		if (mappings.some((m) => m.sync_status && ACTIVE_STATUSES.has(m.sync_status))) {
+		const updated = data.mappings;
+		mappings = updated;
+		if (updated.some((m) => m.sync_status && ACTIVE_STATUSES.has(m.sync_status))) {
 			startPolling();
 		}
 		return () => {

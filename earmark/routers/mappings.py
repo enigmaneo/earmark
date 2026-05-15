@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,6 +8,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from earmark.config import settings
+
+logger = logging.getLogger(__name__)
 from earmark.database import get_session
 from earmark.earmark_auth import get_current_earmark_user
 from earmark.models import AbsEbookMapping, AbsLibraryItem, AlignmentJob, EbookMetadataCache, User
@@ -105,7 +108,7 @@ async def list_abs_items(
             finally:
                 await client.close()
         except Exception:
-            pass
+            logger.error("Failed to fetch library items from Audiobookshelf", exc_info=True)
 
     result = await session.execute(select(AbsLibraryItem).order_by(AbsLibraryItem.title))
     rows = result.scalars().all()
