@@ -112,7 +112,6 @@
 				<tr>
 					<th>Audiobook</th>
 					<th>Author</th>
-					<th>Ebook File</th>
 					<th>KOSync Hash</th>
 					<th>Created</th>
 					<th></th>
@@ -123,7 +122,6 @@
 					<tr>
 						<td class="max-w-xs truncate">{m.abs_title}</td>
 						<td class="max-w-xs truncate">{m.abs_author ?? '—'}</td>
-						<td class="max-w-xs truncate font-mono text-sm">{m.ebook_filename}</td>
 						<td class="font-mono text-xs">
 							{#if m.kosync_document}
 								<a href="/?document={m.kosync_document}" class="anchor">{m.kosync_document.slice(0, 8)}…</a>
