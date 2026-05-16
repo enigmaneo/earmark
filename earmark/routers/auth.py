@@ -35,7 +35,7 @@ async def login(body: UserCreate, session: AsyncSession = Depends(get_session)) 
     user = result.scalar_one_or_none()
     if user is None or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    token = create_access_token({"sub": str(user.id)})
+    token = create_access_token({"sub": str(user.id), "email": user.email})
     return TokenResponse(access_token=token)
 
 

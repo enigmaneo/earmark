@@ -1,8 +1,9 @@
 import { fail, redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import type { SortBy, SortDir } from '$lib/api';
+import { config } from '$lib/server/config';
 
-const BACKEND = 'http://localhost:8000';
+const BACKEND = config.backendUrl;
 
 export const load: PageServerLoad = async ({ cookies, url }) => {
 	const token = cookies.get('earmark_session');

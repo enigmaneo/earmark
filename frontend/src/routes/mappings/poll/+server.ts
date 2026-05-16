@@ -1,7 +1,8 @@
 import { json, redirect } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { config } from '$lib/server/config';
 
-const BACKEND = 'http://localhost:8000';
+const BACKEND = config.backendUrl;
 
 export const GET: RequestHandler = async ({ cookies }) => {
 	const token = cookies.get('earmark_session');

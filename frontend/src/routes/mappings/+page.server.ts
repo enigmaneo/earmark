@@ -1,8 +1,9 @@
 import { fail, redirect } from '@sveltejs/kit';
 import type { AbsItemSummary, EbookFileSummary, MappingRead } from '$lib/api';
 import type { Actions, PageServerLoad } from './$types';
+import { config } from '$lib/server/config';
 
-const BACKEND = 'http://localhost:8000';
+const BACKEND = config.backendUrl;
 
 export const load: PageServerLoad = async ({ cookies }): Promise<{
 	absItems: AbsItemSummary[];
