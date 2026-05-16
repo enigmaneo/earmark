@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -300,8 +301,10 @@ async def delete_mapping(
     mapping = result.scalar_one_or_none()
     if mapping is None:
         raise HTTPException(status_code=404, detail="Mapping not found")
+    abs_item_id = mapping.abs_item_id
     await session.delete(mapping)
     await session.commit()
+    shutil.rmtree(Path(settings.alignment_cache_dir) / abs_item_id, ignore_errors=True)
     return {"deleted": mapping_id}
 
 
