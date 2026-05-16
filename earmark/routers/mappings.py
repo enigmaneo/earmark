@@ -327,7 +327,7 @@ async def sync_mapping(
     if any_active.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Another sync is already running")
 
-    job = AlignmentJob(abs_item_id=mapping.abs_item_id, status="pending", progress=0)
+    job = AlignmentJob(abs_item_id=mapping.abs_item_id, status="pending", progress=0, ebook_path=mapping.ebook_path)
     session.add(job)
     await session.flush()
     mapping.alignment_job_id = job.id

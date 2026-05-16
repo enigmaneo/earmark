@@ -351,15 +351,19 @@ class AlignmentPipeline:
             await self._update_status("fetching_ebook", progress=40, ebook_cache_path=str(ebook_path))
             return ebook_path
 
-        source = settings.ebook_source
-        if source == "abs":
-            await self._download_ebook_from_abs(ebook_path, item_metadata)
-        elif source == "cwa":
-            await self._download_ebook_from_cwa(ebook_path, item_metadata)
-        elif source == "local":
-            await self._download_ebook_from_local(ebook_path, item_metadata)
+        if self.job.ebook_path:
+            src = Path(settings.ebook_local_root) / self.job.ebook_path
+            await asyncio.to_thread(shutil.copy2, src, ebook_path)
         else:
-            raise ValueError(f"Unknown ebook_source: {source!r}")
+            source = settings.ebook_source
+            if source == "abs":
+                await self._download_ebook_from_abs(ebook_path, item_metadata)
+            elif source == "cwa":
+                await self._download_ebook_from_cwa(ebook_path, item_metadata)
+            elif source == "local":
+                await self._download_ebook_from_local(ebook_path, item_metadata)
+            else:
+                raise ValueError(f"Unknown ebook_source: {source!r}")
 
         await self._update_status("fetching_ebook", progress=40, ebook_cache_path=str(ebook_path))
         return ebook_path
