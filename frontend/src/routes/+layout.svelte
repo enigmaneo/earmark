@@ -1,11 +1,19 @@
 <script lang="ts">
 	import '../app.css';
-	import { AppBar } from '@skeletonlabs/skeleton-svelte';
+	import { AppBar, Toast } from '@skeletonlabs/skeleton-svelte';
+	import { toaster } from '$lib/toaster';
 	import type { LayoutData } from './$types';
 
 	let { children, data }: { children: import('svelte').Snippet; data: LayoutData } = $props();
 </script>
 
+<Toast.Group {toaster}>
+	{#snippet children(t)}
+		<Toast toast={t}>
+			<Toast.Title />
+		</Toast>
+	{/snippet}
+</Toast.Group>
 <div class="flex h-full flex-col">
 	<AppBar>
 		<AppBar.Lead>

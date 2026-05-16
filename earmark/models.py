@@ -82,6 +82,7 @@ class AlignmentJob(Base):
         String(255), ForeignKey("abs_library_items.abs_item_id"), index=True
     )
     status: Mapped[str] = mapped_column(String(50), default="pending")
+    progress: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     audio_cache_dir: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     ebook_cache_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
@@ -109,9 +110,13 @@ class AbsEbookMapping(Base):
     ebook_path: Mapped[str] = mapped_column(String(1000))
     ebook_filename: Mapped[str] = mapped_column(String(500))
     kosync_document: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    alignment_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("alignment_jobs.id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="ebook_mappings")
+    alignment_job: Mapped["AlignmentJob | None"] = relationship(lazy="joined")
 
 
 class EbookMetadataCache(Base):

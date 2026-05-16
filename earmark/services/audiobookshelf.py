@@ -1,14 +1,18 @@
+import logging
 from pathlib import Path
 
 import httpx
 
 from earmark.config import settings
 
+logger = logging.getLogger(__name__)
+
 _DOWNLOAD_TIMEOUT = httpx.Timeout(10.0, read=300.0)
 
 
 class AudiobookshelfClient:
     def __init__(self) -> None:
+        logger.debug("AudiobookshelfClient connecting to %s", settings.audiobookshelf_url)
         self._client = httpx.AsyncClient(
             base_url=settings.audiobookshelf_url,
             headers={"Authorization": f"Bearer {settings.audiobookshelf_api_key}"},

@@ -1,4 +1,5 @@
 import hashlib
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -10,6 +11,8 @@ from earmark.database import get_session
 from earmark.earmark_auth import decode_access_token
 from earmark.models import KosyncUser, User
 from earmark.schemas import KosyncUserCreate, KosyncUserCreated
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -26,6 +29,7 @@ async def _get_optional_web_user(
         payload = decode_access_token(credentials.credentials)
         user_id = int(str(payload.get("sub", "")))
     except Exception:
+        logger.debug("Invalid session token", exc_info=True)
         return None
     result = await session.execute(select(User).where(User.id == user_id))
     return result.scalar_one_or_none()

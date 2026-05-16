@@ -19,6 +19,7 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "ffmpeg-python>=0.2",
     "numpy>=1.24",
+    "rich>=13.0",
 ]
 
 [project.optional-dependencies]

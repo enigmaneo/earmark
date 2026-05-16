@@ -246,7 +246,7 @@ class AlignmentPipeline:
     # ── stages ─────────────────────────────────────────────────────────────────
 
     async def _fetch_abs_metadata(self) -> dict:  # type: ignore[type-arg]
-        await self._update_status("fetching_audio")
+        await self._update_status("fetching_audio", progress=5)
         item = await self._abs.get_item(self.job.abs_item_id)
 
         media = item.get("media", {})
@@ -316,12 +316,13 @@ class AlignmentPipeline:
                         self.job.abs_item_id, ino, dest
                     )
                     break
-                except httpx.HTTPError:
+                except httpx.HTTPError as exc:
                     if attempt == 2:
                         raise
+                    logger.warning("Audio download attempt %d/3 failed: %s", attempt + 1, exc)
                     await asyncio.sleep(2**attempt)
 
-        await self._update_status("fetching_audio", audio_cache_dir=str(audio_dir))
+        await self._update_status("fetching_audio", progress=20, audio_cache_dir=str(audio_dir))
 
         # Write cache sentinel
         abs_updated_at = item_metadata.get("updatedAt")
@@ -335,7 +336,7 @@ class AlignmentPipeline:
     async def _download_ebook(
         self, cache_dir: Path, item_metadata: dict  # type: ignore[type-arg]
     ) -> Path:
-        await self._update_status("fetching_ebook")
+        await self._update_status("fetching_ebook", progress=30)
         ebook_path = cache_dir / "ebook.epub"
 
         # CLI override: ebook_cache_path already set, copy into standard location
@@ -343,11 +344,11 @@ class AlignmentPipeline:
             src = Path(self.job.ebook_cache_path)
             if not ebook_path.exists():
                 shutil.copy2(src, ebook_path)
-            await self._update_status("fetching_ebook", ebook_cache_path=str(ebook_path))
+            await self._update_status("fetching_ebook", progress=40, ebook_cache_path=str(ebook_path))
             return ebook_path
 
         if ebook_path.exists():
-            await self._update_status("fetching_ebook", ebook_cache_path=str(ebook_path))
+            await self._update_status("fetching_ebook", progress=40, ebook_cache_path=str(ebook_path))
             return ebook_path
 
         source = settings.ebook_source
@@ -360,7 +361,7 @@ class AlignmentPipeline:
         else:
             raise ValueError(f"Unknown ebook_source: {source!r}")
 
-        await self._update_status("fetching_ebook", ebook_cache_path=str(ebook_path))
+        await self._update_status("fetching_ebook", progress=40, ebook_cache_path=str(ebook_path))
         return ebook_path
 
     async def _download_ebook_from_abs(
@@ -375,9 +376,10 @@ class AlignmentPipeline:
             try:
                 await self._abs.download_ebook(self.job.abs_item_id, dest)
                 return
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
                 if attempt == 2:
                     raise
+                logger.warning("Ebook download attempt %d/3 failed: %s", attempt + 1, exc)
                 await asyncio.sleep(2**attempt)
 
     async def _download_ebook_from_cwa(
@@ -494,9 +496,9 @@ class AlignmentPipeline:
         shutil.copy2(best_path, dest)
 
     async def _parse_epub(self, epub_path: Path) -> tuple[list[str], dict[str, dict[str, str]], int]:
-        await self._update_status("parsing_epub")
+        await self._update_status("parsing_epub", progress=50)
         paragraphs, index, first_chapter_spine_pos = await asyncio.to_thread(_parse_epub_sync, epub_path)
-        await self._update_status("parsing_epub", paragraph_count=len(paragraphs))
+        await self._update_status("parsing_epub", progress=60, paragraph_count=len(paragraphs))
         return paragraphs, index, first_chapter_spine_pos
 
     async def _prepare_audio(self, audio_dir: Path, trim_start: float = 0.0) -> Path:
@@ -527,7 +529,7 @@ class AlignmentPipeline:
         audio_path: Path,
         paragraphs: list[str],
     ) -> list[dict[str, str]]:
-        await self._update_status("aligning")
+        await self._update_status("aligning", progress=65)
 
         paragraphs_path = cache_dir / "paragraphs.txt"
         paragraphs_path.write_text("\n".join(paragraphs) + "\n", encoding="utf-8")
@@ -537,7 +539,7 @@ class AlignmentPipeline:
             _run_aeneas_sync, audio_path, paragraphs_path, raw_output_path
         )
 
-        await self._update_status("aligning", fragment_count=len(fragments))
+        await self._update_status("aligning", progress=85, fragment_count=len(fragments))
         return fragments
 
     async def _assemble_sync_map(
@@ -549,7 +551,7 @@ class AlignmentPipeline:
         chapters: list[dict],  # type: ignore[type-arg]
         first_chapter_spine_pos: int,
     ) -> None:
-        await self._update_status("assembling")
+        await self._update_status("assembling", progress=90)
 
         para_count = len(index)
         frag_count = len(fragments)
@@ -596,6 +598,7 @@ class AlignmentPipeline:
 
         await self._update_status(
             "complete",
+            progress=100,
             sync_map_path=str(sync_map_path),
             fragment_count=frag_count,
             paragraph_count=para_count,
@@ -608,8 +611,10 @@ class AlignmentPipeline:
     def _cache_dir(self) -> Path:
         return Path(settings.alignment_cache_dir) / self.job.abs_item_id
 
-    async def _update_status(self, status: str, **kwargs: object) -> None:
+    async def _update_status(self, status: str, progress: int | None = None, **kwargs: object) -> None:
         self.job.status = status
+        if progress is not None:
+            self.job.progress = progress
         for k, v in kwargs.items():
             setattr(self.job, k, v)
         await self.session.commit()

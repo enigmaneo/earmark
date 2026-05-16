@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,13 +10,46 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from earmark.config import settings
 from earmark.database import get_session
 from earmark.earmark_auth import get_current_earmark_user
-from earmark.models import AbsEbookMapping, AbsLibraryItem, EbookMetadataCache, User
+from earmark.models import AbsEbookMapping, AbsLibraryItem, AlignmentJob, EbookMetadataCache, User
 from earmark.schemas import AbsItemSummary, EbookFileSummary, MappingCreate, MappingRead
+from earmark.services.alignment import run_alignment_job
 from earmark.services.audiobookshelf import AudiobookshelfClient
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/web", tags=["mappings"])
 
 _EBOOK_EXTENSIONS = {".epub", ".pdf", ".mobi", ".azw3"}
+_ACTIVE_STATUSES = {"pending", "fetching_audio", "fetching_ebook", "parsing_epub", "aligning", "assembling"}
+
+
+def _check_cache_intact(abs_item_id: str, lib_item: AbsLibraryItem | None) -> bool | None:
+    if lib_item is None or lib_item.abs_updated_at is None:
+        return None
+    sentinel = Path(settings.alignment_cache_dir) / abs_item_id / ".abs_updated_at"
+    if not sentinel.exists():
+        return False
+    return sentinel.read_text().strip() == lib_item.abs_updated_at.isoformat()
+
+
+def _mapping_to_schema(m: AbsEbookMapping, lib_item: AbsLibraryItem | None) -> MappingRead:
+    job = m.alignment_job
+    return MappingRead(
+        id=m.id,
+        user_id=m.user_id,
+        abs_item_id=m.abs_item_id,
+        abs_title=m.abs_title,
+        abs_author=m.abs_author,
+        ebook_path=m.ebook_path,
+        ebook_filename=m.ebook_filename,
+        kosync_document=m.kosync_document,
+        created_at=m.created_at,
+        alignment_job_id=job.id if job else None,
+        sync_status=job.status if job else None,
+        sync_progress=job.progress if job else None,
+        sync_error=job.error_message if job else None,
+        cache_intact=_check_cache_intact(m.abs_item_id, lib_item),
+    )
 
 
 def _extract_epub_metadata(path: Path) -> tuple[str | None, str | None]:
@@ -31,6 +65,7 @@ def _extract_epub_metadata(path: Path) -> tuple[str | None, str | None]:
             author[0][0] if author else None,
         )
     except Exception:
+        logger.warning("Failed to extract EPUB metadata from %s", path, exc_info=True)
         return None, None
 
 
@@ -44,6 +79,7 @@ def _extract_pdf_metadata(path: Path) -> tuple[str | None, str | None]:
             return None, None
         return info.title or None, info.author or None
     except Exception:
+        logger.warning("Failed to extract PDF metadata from %s", path, exc_info=True)
         return None, None
 
 
@@ -75,7 +111,14 @@ async def list_abs_items(
             finally:
                 await client.close()
         except Exception:
-            pass
+            logger.error(
+                "Failed to fetch library items from Audiobookshelf at %s",
+                settings.audiobookshelf_url,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503, detail="Failed to fetch library items from Audiobookshelf"
+            )
 
     result = await session.execute(select(AbsLibraryItem).order_by(AbsLibraryItem.title))
     rows = result.scalars().all()
@@ -111,6 +154,7 @@ async def list_ebook_files(
             try:
                 stat = file.stat()
             except OSError:
+                logger.debug("Cannot stat %s, skipping", file)
                 continue
             path_rel = file.relative_to(root).as_posix()
             cached = cache.get(path_rel)
@@ -184,13 +228,21 @@ async def list_ebook_files(
 async def list_mappings(
     user: User = Depends(get_current_earmark_user),
     session: AsyncSession = Depends(get_session),
-) -> list[AbsEbookMapping]:
+) -> list[MappingRead]:
     result = await session.execute(
         select(AbsEbookMapping)
         .where(AbsEbookMapping.user_id == user.id)
         .order_by(AbsEbookMapping.created_at.desc())
     )
-    return list(result.scalars().all())
+    mappings = list(result.scalars().all())
+
+    abs_item_ids = {m.abs_item_id for m in mappings}
+    lib_result = await session.execute(
+        select(AbsLibraryItem).where(AbsLibraryItem.abs_item_id.in_(abs_item_ids))
+    )
+    lib_by_id = {li.abs_item_id: li for li in lib_result.scalars().all()}
+
+    return [_mapping_to_schema(m, lib_by_id.get(m.abs_item_id)) for m in mappings]
 
 
 @router.post("/mappings", response_model=MappingRead, status_code=201)
@@ -198,7 +250,7 @@ async def create_mapping(
     body: MappingCreate,
     user: User = Depends(get_current_earmark_user),
     session: AsyncSession = Depends(get_session),
-) -> AbsEbookMapping:
+) -> MappingRead:
     existing = await session.execute(
         select(AbsEbookMapping).where(
             AbsEbookMapping.user_id == user.id,
@@ -215,7 +267,8 @@ async def create_mapping(
         content = await asyncio.to_thread(full_path.read_bytes)
         kosync_document = hashlib.md5(content).hexdigest()
     except OSError:
-        pass
+        logger.error("Cannot read ebook file: %s", full_path, exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not read ebook file")
 
     mapping = AbsEbookMapping(
         user_id=user.id,
@@ -229,7 +282,7 @@ async def create_mapping(
     session.add(mapping)
     await session.commit()
     await session.refresh(mapping)
-    return mapping
+    return _mapping_to_schema(mapping, None)
 
 
 @router.delete("/mappings/{mapping_id}")
@@ -250,3 +303,41 @@ async def delete_mapping(
     await session.delete(mapping)
     await session.commit()
     return {"deleted": mapping_id}
+
+
+@router.post("/mappings/{mapping_id}/sync", response_model=MappingRead, status_code=202)
+async def sync_mapping(
+    mapping_id: int,
+    user: User = Depends(get_current_earmark_user),
+    session: AsyncSession = Depends(get_session),
+) -> MappingRead:
+    result = await session.execute(
+        select(AbsEbookMapping).where(
+            AbsEbookMapping.id == mapping_id,
+            AbsEbookMapping.user_id == user.id,
+        )
+    )
+    mapping = result.scalar_one_or_none()
+    if mapping is None:
+        raise HTTPException(status_code=404, detail="Mapping not found")
+
+    any_active = await session.execute(
+        select(AlignmentJob).where(AlignmentJob.status.in_(_ACTIVE_STATUSES)).limit(1)
+    )
+    if any_active.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Another sync is already running")
+
+    job = AlignmentJob(abs_item_id=mapping.abs_item_id, status="pending", progress=0)
+    session.add(job)
+    await session.flush()
+    mapping.alignment_job_id = job.id
+    await session.commit()
+    await session.refresh(mapping)
+
+    lib_result = await session.execute(
+        select(AbsLibraryItem).where(AbsLibraryItem.abs_item_id == mapping.abs_item_id)
+    )
+    lib_item = lib_result.scalar_one_or_none()
+
+    asyncio.create_task(run_alignment_job(job.id))
+    return _mapping_to_schema(mapping, lib_item)
