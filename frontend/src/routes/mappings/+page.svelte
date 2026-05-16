@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
 	import type { AbsItemSummary, EbookFileSummary, MappingRead } from '$lib/api';
 	import type { ActionData, PageData } from './$types';
 	import { toaster } from '$lib/toaster';
@@ -36,6 +35,19 @@
 
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
+	async function pollMappings() {
+		const res = await fetch('/mappings/poll');
+		if (!res.ok) return;
+		const updated = (await res.json()) as MappingRead[];
+		for (const m of updated) {
+			const prev = mappings.find((p) => p.id === m.id);
+			if (m.sync_status === 'failed' && prev && ACTIVE_STATUSES.has(prev.sync_status ?? '')) {
+				toaster.create({ type: 'error', title: `Alignment failed for "${m.abs_title}"` });
+			}
+		}
+		mappings = updated;
+	}
+
 	function startPolling() {
 		if (pollTimer) return;
 		pollTimer = setInterval(async () => {
@@ -44,7 +56,7 @@
 				pollTimer = null;
 				return;
 			}
-			await invalidateAll();
+			await pollMappings();
 		}, 2000);
 	}
 
