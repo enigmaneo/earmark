@@ -15,6 +15,16 @@
 		(data.absItems as AbsItemSummary[]).find((a) => a.abs_item_id === selectedAbsItemId) ?? null
 	);
 
+	let usedAbsIds = $derived(new Set(mappings.map((m) => m.abs_item_id)));
+	let usedEbookPaths = $derived(new Set(mappings.map((m) => m.ebook_path)));
+
+	let availableAbsItems = $derived(
+		(data.absItems as AbsItemSummary[]).filter((a) => !usedAbsIds.has(a.abs_item_id))
+	);
+	let availableEbookFiles = $derived(
+		(data.ebookFiles as EbookFileSummary[]).filter((e) => !usedEbookPaths.has(e.path))
+	);
+
 	function ebookLabel(e: EbookFileSummary): string {
 		if (e.title) return e.author ? `"${e.title}" — ${e.author}` : e.title;
 		return e.filename;
@@ -127,14 +137,14 @@
 
 			<label class="label">
 				<span>ABS Audiobook</span>
-				{#if (data.absItems as AbsItemSummary[]).length === 0}
+				{#if availableAbsItems.length === 0}
 					<select class="select" disabled>
 						<option>No audiobooks found</option>
 					</select>
 				{:else}
 					<select class="select" bind:value={selectedAbsItemId}>
 						<option value="">Choose audiobook…</option>
-						{#each data.absItems as abs (abs.abs_item_id)}
+						{#each availableAbsItems as abs (abs.abs_item_id)}
 							<option value={abs.abs_item_id}>
 								{abs.title}{abs.author ? ` — ${abs.author}` : ''}
 							</option>
@@ -145,14 +155,14 @@
 
 			<label class="label">
 				<span>Ebook</span>
-				{#if (data.ebookFiles as EbookFileSummary[]).length === 0}
+				{#if availableEbookFiles.length === 0}
 					<select class="select" disabled>
 						<option>No ebooks found — check EBOOK_LOCAL_ROOT</option>
 					</select>
 				{:else}
 					<select class="select" bind:value={selectedEbookPath}>
 						<option value="">Choose ebook…</option>
-						{#each data.ebookFiles as ebook (ebook.path)}
+						{#each availableEbookFiles as ebook (ebook.path)}
 							<option value={ebook.path}>{ebookLabel(ebook)}</option>
 						{/each}
 					</select>
