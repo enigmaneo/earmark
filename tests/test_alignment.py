@@ -1,5 +1,6 @@
 import copy
 import json
+import queue
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -90,7 +91,10 @@ async def _run_pipeline(
         output_path.write_bytes(b"fake_wav_trimmed")
 
     def fake_run_aeneas(
-        audio_path: Path, paragraphs_path: Path, raw_output_path: Path
+        audio_path: Path,
+        paragraphs_path: Path,
+        raw_output_path: Path,
+        progress_q: queue.SimpleQueue | None = None,
     ) -> list[dict[str, str]]:
         raw_output_path.write_text(
             json.dumps({"fragments": FAKE_FRAGMENTS}), encoding="utf-8"
