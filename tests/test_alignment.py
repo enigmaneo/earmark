@@ -85,6 +85,10 @@ async def _run_pipeline(
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"fake_wav")
 
+    def fake_ffmpeg_trim(input_path: Path, output_path: Path, start: float) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"fake_wav_trimmed")
+
     def fake_run_aeneas(
         audio_path: Path, paragraphs_path: Path, raw_output_path: Path
     ) -> list[dict[str, str]]:
@@ -108,6 +112,7 @@ async def _run_pipeline(
         ),
         patch("earmark.services.alignment._parse_epub_sync", fake_parse_epub),
         patch("earmark.services.alignment._ffmpeg_concat_sync", fake_ffmpeg_concat),
+        patch("earmark.services.alignment._ffmpeg_trim_sync", fake_ffmpeg_trim),
         patch("earmark.services.alignment._run_aeneas_sync", fake_run_aeneas),
         patch("earmark.config.settings.alignment_cache_dir", str(cache_dir)),
     ):

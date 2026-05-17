@@ -128,6 +128,17 @@ async def _sync_mapping(
     )
     ko_progress = ko_result.scalar_one_or_none()
 
+    # Skip if neither side has changed since the last sync
+    if abs_data is not None and ko_progress is not None and mapping.last_synced_at is not None:
+        abs_ts_check = datetime.fromtimestamp(abs_data["lastUpdate"] / 1000, tz=UTC)
+        raw_ko = ko_progress.updated_at
+        ko_ts_check = raw_ko if raw_ko.tzinfo is not None else raw_ko.replace(tzinfo=UTC)
+        last = mapping.last_synced_at if mapping.last_synced_at.tzinfo is not None \
+            else mapping.last_synced_at.replace(tzinfo=UTC)
+        if abs_ts_check <= last and ko_ts_check <= last:
+            logger.debug("Skipping %s: no changes since last sync (%s)", abs_item_id, last)
+            return
+
     # Determine direction
     if abs_data is None and ko_progress is None:
         return
@@ -147,6 +158,8 @@ async def _sync_mapping(
                 device=_SYNC_DEVICE,
                 device_id=_SYNC_DEVICE,
             )
+        mapping.last_synced_at = datetime.now(UTC)
+        await session.commit()
         logger.info("ABS→KOSync %s: %s → %.4f%%", abs_item_id, None, percentage)
         return
 
@@ -167,6 +180,8 @@ async def _sync_mapping(
             duration=0.0,
             progress=ko_progress.percentage,
         )
+        mapping.last_synced_at = datetime.now(UTC)
+        await session.commit()
         logger.info("KOSync→ABS %s: %s → %.4f%%", abs_item_id, None, ko_progress.percentage)
         return
 
@@ -200,6 +215,8 @@ async def _sync_mapping(
                 device=_SYNC_DEVICE,
                 device_id=_SYNC_DEVICE,
             )
+        mapping.last_synced_at = datetime.now(UTC)
+        await session.commit()
         logger.info("ABS→KOSync %s: %.4f%% → %.4f%%", abs_item_id, ko_progress.percentage, new_percentage)
     else:
         # KOSync is newer → update ABS
@@ -213,9 +230,12 @@ async def _sync_mapping(
             )
             return
         if audio_time <= abs_data["currentTime"]:
+            duration = abs_data["duration"]
             logger.warning(
-                "Skipping ABS update for %s: new position %.1fs <= current %.1fs",
-                abs_item_id, audio_time, abs_data["currentTime"],
+                "Skipping ABS update for %s: new position %.4f%% <= current %.4f%%",
+                abs_item_id,
+                audio_time / duration * 100 if duration else 0.0,
+                abs_data["currentTime"] / duration * 100 if duration else 0.0,
             )
             return
         await abs_client.update_progress(
@@ -224,6 +244,8 @@ async def _sync_mapping(
             duration=abs_data["duration"],
             progress=ko_progress.percentage,
         )
+        mapping.last_synced_at = datetime.now(UTC)
+        await session.commit()
         logger.info("KOSync→ABS %s: %.4f%% → %.4f%%", abs_item_id, abs_data["progress"], ko_progress.percentage)
 
 
