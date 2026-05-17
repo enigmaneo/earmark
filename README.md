@@ -25,7 +25,7 @@ Edit `.env` and fill in your Audiobookshelf URL and API key:
 ```
 AUDIOBOOKSHELF_URL=http://your-abs-host:13378
 AUDIOBOOKSHELF_API_KEY=your_api_key_here
-SYNC_INTERVAL_MINUTES=5
+SYNC_INTERVAL_SECONDS=300
 ```
 
 ### 2. Backend
