@@ -107,9 +107,12 @@ async def _write_abs_to_kosync(
             kosync_user_id=ku.id,
             document=mapping.kosync_document,
             progress=ebook_pos,
-            percentage=new_pct,
+            percentage=round(new_pct, 2),
             device=_SYNC_DEVICE,
             device_id=_SYNC_DEVICE,
+            title=mapping.abs_title,
+            authors=mapping.abs_author,
+            filename=mapping.ebook_filename,
         )
     mapping.last_synced_at = datetime.now(UTC)
     await session.commit()
