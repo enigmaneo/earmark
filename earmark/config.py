@@ -1,4 +1,3 @@
-from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,11 +16,6 @@ class Settings(BaseSettings):
     kosync_port: int = 8080
 
     sync_interval_seconds: int = 300
-
-    @computed_field
-    @property
-    def sync_interval_minutes(self) -> float:
-        return self.sync_interval_seconds / 60
 
     ebook_source: str = "abs"  # "abs" | "cwa" | "local"
     cwa_url: str = ""

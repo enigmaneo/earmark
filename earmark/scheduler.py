@@ -101,6 +101,7 @@ async def _write_abs_to_kosync(
             mapping.abs_item_id, new_pct, min_percentage,
         )
         return
+    mapping.last_synced_at = datetime.now(UTC)
     for ku in mapping.user.kosync_users:
         await write_reading_progress(
             session,
@@ -114,8 +115,6 @@ async def _write_abs_to_kosync(
             authors=mapping.abs_author,
             filename=mapping.ebook_filename,
         )
-    mapping.last_synced_at = datetime.now(UTC)
-    await session.commit()
     logger.info("ABS→KOSync %s: %.4f%%", mapping.abs_item_id, new_pct)
 
 
@@ -235,24 +234,34 @@ async def sync_progress() -> None:
     started_at = asyncio.get_event_loop().time()
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(AbsEbookMapping)
+            select(AbsEbookMapping.id)
             .join(AlignmentJob, AbsEbookMapping.alignment_job_id == AlignmentJob.id)
-            .options(selectinload(AbsEbookMapping.user).selectinload(User.kosync_users))
             .where(
                 AbsEbookMapping.kosync_document.isnot(None),
                 AlignmentJob.status == "complete",
                 AlignmentJob.sync_map_path.isnot(None),
             )
         )
-        abs_client = AudiobookshelfClient()
-        try:
-            for mapping in result.scalars():
-                try:
+        mapping_ids: list[int] = list(result.scalars())
+
+    abs_client = AudiobookshelfClient()
+    try:
+        for mapping_id in mapping_ids:
+            try:
+                async with AsyncSessionLocal() as session:
+                    mapping_result = await session.execute(
+                        select(AbsEbookMapping)
+                        .options(selectinload(AbsEbookMapping.user).selectinload(User.kosync_users))
+                        .where(AbsEbookMapping.id == mapping_id)
+                    )
+                    mapping = mapping_result.scalar_one_or_none()
+                    if mapping is None:
+                        continue
                     await _sync_mapping(mapping, abs_client, session)
-                except Exception:
-                    logger.exception("Error syncing mapping %s", mapping.id)
-        finally:
-            await abs_client.close()
+            except Exception:
+                logger.exception("Error syncing mapping %s", mapping_id)
+    finally:
+        await abs_client.close()
     elapsed = asyncio.get_event_loop().time() - started_at
     logger.info("Progress sync complete (%.2fs)", elapsed)
 
@@ -261,7 +270,7 @@ def start_scheduler() -> None:
     scheduler.add_job(
         sync_progress,
         "interval",
-        minutes=settings.sync_interval_minutes,
+        seconds=settings.sync_interval_seconds,
         id="sync_progress",
         replace_existing=True,
     )

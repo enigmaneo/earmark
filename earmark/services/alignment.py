@@ -188,7 +188,8 @@ def _rescale_to_chapters(
 ) -> None:
     """Linearly rescale aeneas timestamps within each EPUB chapter to match ABS chapter boundaries.
 
-    Assumes ABS chapters[1], chapters[2], ... correspond to EPUB DocFragment[first_chapter_spine_pos],
+    Assumes ABS chapters[1], chapters[2], ... correspond to EPUB
+    DocFragment[first_chapter_spine_pos],
     DocFragment[first_chapter_spine_pos+1], etc. (one ABS chapter per spine item).
     Entries whose spine position doesn't map to a valid chapter index are left unchanged.
     """
@@ -380,11 +381,15 @@ class AlignmentPipeline:
             src = Path(self.job.ebook_cache_path)
             if not ebook_path.exists():
                 shutil.copy2(src, ebook_path)
-            await self._update_status("fetching_ebook", progress=18, ebook_cache_path=str(ebook_path))
+            await self._update_status(
+                "fetching_ebook", progress=18, ebook_cache_path=str(ebook_path)
+            )
             return ebook_path
 
         if ebook_path.exists():
-            await self._update_status("fetching_ebook", progress=18, ebook_cache_path=str(ebook_path))
+            await self._update_status(
+                "fetching_ebook", progress=18, ebook_cache_path=str(ebook_path)
+            )
             return ebook_path
 
         if self.job.ebook_path:
@@ -535,9 +540,13 @@ class AlignmentPipeline:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(best_path, dest)
 
-    async def _parse_epub(self, epub_path: Path) -> tuple[list[str], dict[str, dict[str, str]], int]:
+    async def _parse_epub(
+        self, epub_path: Path
+    ) -> tuple[list[str], dict[str, dict[str, str]], int]:
         await self._update_status("parsing_epub", progress=20)
-        paragraphs, index, first_chapter_spine_pos = await asyncio.to_thread(_parse_epub_sync, epub_path)
+        paragraphs, index, first_chapter_spine_pos = await asyncio.to_thread(
+            _parse_epub_sync, epub_path
+        )
         await self._update_status("parsing_epub", progress=25, paragraph_count=len(paragraphs))
         return paragraphs, index, first_chapter_spine_pos
 
@@ -589,7 +598,8 @@ class AlignmentPipeline:
                 try:
                     drained_any = False
                     while not progress_q.empty():
-                        current = progress_q.get_nowait()
+                        val = progress_q.get_nowait()
+                        current = max(current, val)
                         logger.debug("drain_and_tick: queue → progress=%d", current)
                         await self._update_status("aligning", progress=current)
                         drained_any = True
@@ -719,7 +729,9 @@ class AlignmentPipeline:
     def _cache_dir(self) -> Path:
         return Path(settings.alignment_cache_dir) / self.job.abs_item_id
 
-    async def _update_status(self, status: str, progress: int | None = None, **kwargs: object) -> None:
+    async def _update_status(
+        self, status: str, progress: int | None = None, **kwargs: object
+    ) -> None:
         self.job.status = status
         if progress is not None:
             self.job.progress = progress
