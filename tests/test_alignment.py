@@ -1,6 +1,5 @@
 import copy
 import json
-import queue
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -90,15 +89,12 @@ async def _run_pipeline(
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"fake_wav_trimmed")
 
-    def fake_run_aeneas(
+    async def fake_run_aeneas(
+        self: Any,
+        cache_dir: Path,
         audio_path: Path,
-        paragraphs_path: Path,
-        raw_output_path: Path,
-        progress_q: queue.SimpleQueue | None = None,
+        paragraphs: list[str],
     ) -> list[dict[str, str]]:
-        raw_output_path.write_text(
-            json.dumps({"fragments": FAKE_FRAGMENTS}), encoding="utf-8"
-        )
         return FAKE_FRAGMENTS
 
     with (
@@ -117,7 +113,7 @@ async def _run_pipeline(
         patch("earmark.services.alignment._parse_epub_sync", fake_parse_epub),
         patch("earmark.services.alignment._ffmpeg_concat_sync", fake_ffmpeg_concat),
         patch("earmark.services.alignment._ffmpeg_trim_sync", fake_ffmpeg_trim),
-        patch("earmark.services.alignment._run_aeneas_sync", fake_run_aeneas),
+        patch("earmark.services.alignment.AlignmentPipeline._run_aeneas", fake_run_aeneas),
         patch("earmark.config.settings.alignment_cache_dir", str(cache_dir)),
     ):
         await run_alignment_job(job_id, session_factory=session_factory)
