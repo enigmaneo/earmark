@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     ebook_local_root: str = "."
     alignment_cache_dir: str = ".cache/earmark"
 
+    log_level: str = "INFO"
     log_pretty: bool = False
 
 

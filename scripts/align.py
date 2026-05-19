@@ -7,8 +7,15 @@ Usage:
 """
 import argparse
 import asyncio
+import logging
+import os
 import sys
 from pathlib import Path
+
+logging.basicConfig(
+    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
 
 async def main() -> int:

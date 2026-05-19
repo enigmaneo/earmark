@@ -13,16 +13,17 @@ from earmark.scheduler import start_scheduler, stop_scheduler
 
 
 def _configure_logging() -> None:
+    level = getattr(logging, settings.log_level.upper(), logging.INFO)
     if settings.log_pretty:
         from rich.logging import RichHandler
         logging.basicConfig(
-            level=logging.INFO,
+            level=level,
             format="%(message)s",
             datefmt="[%X]",
             handlers=[RichHandler(rich_tracebacks=True)],
         )
     else:
-        logging.basicConfig(level=logging.INFO)
+        logging.basicConfig(level=level)
 
 
 _configure_logging()

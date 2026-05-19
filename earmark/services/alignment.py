@@ -566,21 +566,39 @@ class AlignmentPipeline:
         async def drain_and_tick() -> None:
             DTW_START = 42  # ticking begins once compute-head-tail fires
             DTW_CEIL = 79   # never tick past here (create-sync-map fires at 80)
+            TICK_INTERVAL = 8.0  # seconds between auto-increments during DTW
             current = 28
+            last_tick = asyncio.get_running_loop().time()
+            logger.debug("drain_and_tick started")
 
             while True:
-                drained_any = False
-                while not progress_q.empty():
-                    current = progress_q.get_nowait()
-                    await self._update_status("aligning", progress=current)
-                    drained_any = True
+                try:
+                    drained_any = False
+                    while not progress_q.empty():
+                        current = progress_q.get_nowait()
+                        logger.debug("drain_and_tick: queue → progress=%d", current)
+                        await self._update_status("aligning", progress=current)
+                        drained_any = True
+                        last_tick = asyncio.get_running_loop().time()
 
-                in_dtw = DTW_START <= current < DTW_CEIL
-                if in_dtw and not drained_any:
-                    current += 1
-                    await self._update_status("aligning", progress=current)
+                    in_dtw = DTW_START <= current < DTW_CEIL
+                    now = asyncio.get_running_loop().time()
+                    elapsed = now - last_tick
+                    if in_dtw and not drained_any and elapsed >= TICK_INTERVAL:
+                        current += 1
+                        logger.debug(
+                            "drain_and_tick: auto-tick → progress=%d (%.1fs elapsed)",
+                            current, elapsed,
+                        )
+                        await self._update_status("aligning", progress=current)
+                        last_tick = now
+                except asyncio.CancelledError:
+                    logger.debug("drain_and_tick: cancelled at progress=%d", current)
+                    raise
+                except Exception:
+                    logger.exception("drain_and_tick: error at progress=%d — continuing", current)
 
-                await asyncio.sleep(8.0 if in_dtw else 0.5)
+                await asyncio.sleep(0.5)
 
         drain_task = asyncio.create_task(drain_and_tick())
         try:
@@ -589,8 +607,12 @@ class AlignmentPipeline:
             )
         finally:
             drain_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await drain_task
+            except asyncio.CancelledError:
+                logger.debug("drain_task cancelled cleanly")
+            except Exception:
+                logger.exception("drain_task exited with exception")
 
         while not progress_q.empty():
             await self._update_status("aligning", progress=progress_q.get_nowait())
@@ -673,6 +695,7 @@ class AlignmentPipeline:
             self.job.progress = progress
         for k, v in kwargs.items():
             setattr(self.job, k, v)
+        logger.debug("_update_status: status=%s progress=%s", status, progress)
         await self.session.commit()
 
     async def _fail(self, message: str) -> None:
