@@ -1,8 +1,7 @@
 import asyncio
-import contextlib
 import json
 import logging
-import queue
+import multiprocessing
 import shutil
 import tempfile
 from datetime import UTC, datetime
@@ -125,7 +124,7 @@ def _run_aeneas_sync(
     audio_path: Path,
     paragraphs_path: Path,
     raw_output_path: Path,
-    progress_q: queue.SimpleQueue[int] | None = None,
+    progress_q: "multiprocessing.Queue[int] | None" = None,
 ) -> list[dict[str, str]]:
     from aeneas.executetask import ExecuteTask
     from aeneas.task import Task
@@ -165,6 +164,21 @@ def _run_aeneas_sync(
     with raw_output_path.open() as f:
         data = json.load(f)
     return data["fragments"]  # type: ignore[no-any-return]
+
+
+def _run_aeneas_in_process(
+    audio_path: Path,
+    paragraphs_path: Path,
+    raw_output_path: Path,
+    progress_q: "multiprocessing.Queue[int]",
+    result_q: "multiprocessing.SimpleQueue",
+) -> None:
+    """Module-level target for multiprocessing.Process — ForkingPickler can serialize this."""
+    try:
+        _run_aeneas_sync(audio_path, paragraphs_path, raw_output_path, progress_q)
+        result_q.put(None)  # success — fragments already on disk at raw_output_path
+    except Exception as exc:
+        result_q.put(exc)  # small exception object, safe for SimpleQueue
 
 
 def _rescale_to_chapters(
@@ -561,7 +575,7 @@ class AlignmentPipeline:
         paragraphs_path.write_text("\n".join(paragraphs) + "\n", encoding="utf-8")
 
         raw_output_path = cache_dir / "aeneas_raw.json"
-        progress_q: queue.SimpleQueue[int] = queue.SimpleQueue()
+        progress_q: multiprocessing.Queue = multiprocessing.Queue()  # type: ignore[type-arg]
 
         async def drain_and_tick() -> None:
             DTW_START = 42  # ticking begins once compute-head-tail fires
@@ -600,11 +614,24 @@ class AlignmentPipeline:
 
                 await asyncio.sleep(0.5)
 
+        result_q: multiprocessing.SimpleQueue = multiprocessing.SimpleQueue()
+        process = multiprocessing.Process(
+            target=_run_aeneas_in_process,
+            args=(audio_path, paragraphs_path, raw_output_path, progress_q, result_q),
+        )
         drain_task = asyncio.create_task(drain_and_tick())
         try:
-            fragments = await asyncio.to_thread(
-                _run_aeneas_sync, audio_path, paragraphs_path, raw_output_path, progress_q
+            process.start()
+            await asyncio.to_thread(process.join)
+            outcome = result_q.get() if not result_q.empty() else RuntimeError(
+                f"aeneas process exited with code {process.exitcode} and no result"
             )
+            if isinstance(outcome, Exception):
+                raise outcome
+            # Fragments are already on disk; load them directly to avoid pipe-size limits
+            with raw_output_path.open() as f:
+                raw_data = json.load(f)
+            fragments: list[dict[str, str]] = raw_data["fragments"]
         finally:
             drain_task.cancel()
             try:
@@ -613,6 +640,9 @@ class AlignmentPipeline:
                 logger.debug("drain_task cancelled cleanly")
             except Exception:
                 logger.exception("drain_task exited with exception")
+            if process.is_alive():
+                process.terminate()
+                process.join()
 
         while not progress_q.empty():
             await self._update_status("aligning", progress=progress_q.get_nowait())
