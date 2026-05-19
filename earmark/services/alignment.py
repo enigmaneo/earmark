@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import multiprocessing
 import shutil
 import tempfile
 from datetime import UTC, datetime
@@ -120,7 +121,10 @@ def _ffmpeg_concat_sync(audio_files: list[Path], output_path: Path) -> None:
 
 
 def _run_aeneas_sync(
-    audio_path: Path, paragraphs_path: Path, raw_output_path: Path
+    audio_path: Path,
+    paragraphs_path: Path,
+    raw_output_path: Path,
+    progress_q: "multiprocessing.Queue[int] | None" = None,
 ) -> list[dict[str, str]]:
     from aeneas.executetask import ExecuteTask
     from aeneas.task import Task
@@ -137,12 +141,44 @@ def _run_aeneas_sync(
     task.text_file_path_absolute = str(paragraphs_path)
     task.sync_map_file_path_absolute = str(raw_output_path)
 
-    ExecuteTask(task).execute()
+    et = ExecuteTask(task)
+
+    if progress_q is not None:
+        _STEP_PROGRESS = {
+            "extract MFCC real wave": 30,
+            "compute head tail": 42,
+            "create sync map": 80,
+        }
+        _orig_step_begin = et._step_begin
+
+        def _patched_step_begin(label: str, log: bool = True) -> None:
+            if label in _STEP_PROGRESS:
+                progress_q.put(_STEP_PROGRESS[label])
+            _orig_step_begin(label, log)
+
+        et._step_begin = _patched_step_begin
+
+    et.execute()
     task.output_sync_map_file()
 
     with raw_output_path.open() as f:
         data = json.load(f)
     return data["fragments"]  # type: ignore[no-any-return]
+
+
+def _run_aeneas_in_process(
+    audio_path: Path,
+    paragraphs_path: Path,
+    raw_output_path: Path,
+    progress_q: "multiprocessing.Queue[int]",
+    result_q: "multiprocessing.SimpleQueue",
+) -> None:
+    """Module-level target for multiprocessing.Process — ForkingPickler can serialize this."""
+    try:
+        _run_aeneas_sync(audio_path, paragraphs_path, raw_output_path, progress_q)
+        result_q.put(None)  # success — fragments already on disk at raw_output_path
+    except Exception as exc:
+        result_q.put(exc)  # small exception object, safe for SimpleQueue
 
 
 def _rescale_to_chapters(
@@ -152,7 +188,8 @@ def _rescale_to_chapters(
 ) -> None:
     """Linearly rescale aeneas timestamps within each EPUB chapter to match ABS chapter boundaries.
 
-    Assumes ABS chapters[1], chapters[2], ... correspond to EPUB DocFragment[first_chapter_spine_pos],
+    Assumes ABS chapters[1], chapters[2], ... correspond to EPUB
+    DocFragment[first_chapter_spine_pos],
     DocFragment[first_chapter_spine_pos+1], etc. (one ABS chapter per spine item).
     Entries whose spine position doesn't map to a valid chapter index are left unchanged.
     """
@@ -322,7 +359,7 @@ class AlignmentPipeline:
                     logger.warning("Audio download attempt %d/3 failed: %s", attempt + 1, exc)
                     await asyncio.sleep(2**attempt)
 
-        await self._update_status("fetching_audio", progress=20, audio_cache_dir=str(audio_dir))
+        await self._update_status("fetching_audio", progress=12, audio_cache_dir=str(audio_dir))
 
         # Write cache sentinel
         abs_updated_at = item_metadata.get("updatedAt")
@@ -336,7 +373,7 @@ class AlignmentPipeline:
     async def _download_ebook(
         self, cache_dir: Path, item_metadata: dict  # type: ignore[type-arg]
     ) -> Path:
-        await self._update_status("fetching_ebook", progress=30)
+        await self._update_status("fetching_ebook", progress=15)
         ebook_path = cache_dir / "ebook.epub"
 
         # CLI override: ebook_cache_path already set, copy into standard location
@@ -344,11 +381,15 @@ class AlignmentPipeline:
             src = Path(self.job.ebook_cache_path)
             if not ebook_path.exists():
                 shutil.copy2(src, ebook_path)
-            await self._update_status("fetching_ebook", progress=40, ebook_cache_path=str(ebook_path))
+            await self._update_status(
+                "fetching_ebook", progress=18, ebook_cache_path=str(ebook_path)
+            )
             return ebook_path
 
         if ebook_path.exists():
-            await self._update_status("fetching_ebook", progress=40, ebook_cache_path=str(ebook_path))
+            await self._update_status(
+                "fetching_ebook", progress=18, ebook_cache_path=str(ebook_path)
+            )
             return ebook_path
 
         if self.job.ebook_path:
@@ -365,7 +406,7 @@ class AlignmentPipeline:
             else:
                 raise ValueError(f"Unknown ebook_source: {source!r}")
 
-        await self._update_status("fetching_ebook", progress=40, ebook_cache_path=str(ebook_path))
+        await self._update_status("fetching_ebook", progress=18, ebook_cache_path=str(ebook_path))
         return ebook_path
 
     async def _download_ebook_from_abs(
@@ -499,10 +540,14 @@ class AlignmentPipeline:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(best_path, dest)
 
-    async def _parse_epub(self, epub_path: Path) -> tuple[list[str], dict[str, dict[str, str]], int]:
-        await self._update_status("parsing_epub", progress=50)
-        paragraphs, index, first_chapter_spine_pos = await asyncio.to_thread(_parse_epub_sync, epub_path)
-        await self._update_status("parsing_epub", progress=60, paragraph_count=len(paragraphs))
+    async def _parse_epub(
+        self, epub_path: Path
+    ) -> tuple[list[str], dict[str, dict[str, str]], int]:
+        await self._update_status("parsing_epub", progress=20)
+        paragraphs, index, first_chapter_spine_pos = await asyncio.to_thread(
+            _parse_epub_sync, epub_path
+        )
+        await self._update_status("parsing_epub", progress=25, paragraph_count=len(paragraphs))
         return paragraphs, index, first_chapter_spine_pos
 
     async def _prepare_audio(self, audio_dir: Path, trim_start: float = 0.0) -> Path:
@@ -533,17 +578,86 @@ class AlignmentPipeline:
         audio_path: Path,
         paragraphs: list[str],
     ) -> list[dict[str, str]]:
-        await self._update_status("aligning", progress=65)
+        await self._update_status("aligning", progress=28)
 
         paragraphs_path = cache_dir / "paragraphs.txt"
         paragraphs_path.write_text("\n".join(paragraphs) + "\n", encoding="utf-8")
 
         raw_output_path = cache_dir / "aeneas_raw.json"
-        fragments = await asyncio.to_thread(
-            _run_aeneas_sync, audio_path, paragraphs_path, raw_output_path
-        )
+        progress_q: multiprocessing.Queue = multiprocessing.Queue()  # type: ignore[type-arg]
 
-        await self._update_status("aligning", progress=85, fragment_count=len(fragments))
+        async def drain_and_tick() -> None:
+            DTW_START = 42  # ticking begins once compute-head-tail fires
+            DTW_CEIL = 79   # never tick past here (create-sync-map fires at 80)
+            TICK_INTERVAL = 8.0  # seconds between auto-increments during DTW
+            current = 28
+            last_tick = asyncio.get_running_loop().time()
+            logger.debug("drain_and_tick started")
+
+            while True:
+                try:
+                    drained_any = False
+                    while not progress_q.empty():
+                        val = progress_q.get_nowait()
+                        current = max(current, val)
+                        logger.debug("drain_and_tick: queue → progress=%d", current)
+                        await self._update_status("aligning", progress=current)
+                        drained_any = True
+                        last_tick = asyncio.get_running_loop().time()
+
+                    in_dtw = DTW_START <= current < DTW_CEIL
+                    now = asyncio.get_running_loop().time()
+                    elapsed = now - last_tick
+                    if in_dtw and not drained_any and elapsed >= TICK_INTERVAL:
+                        current += 1
+                        logger.debug(
+                            "drain_and_tick: auto-tick → progress=%d (%.1fs elapsed)",
+                            current, elapsed,
+                        )
+                        await self._update_status("aligning", progress=current)
+                        last_tick = now
+                except asyncio.CancelledError:
+                    logger.debug("drain_and_tick: cancelled at progress=%d", current)
+                    raise
+                except Exception:
+                    logger.exception("drain_and_tick: error at progress=%d — continuing", current)
+
+                await asyncio.sleep(0.5)
+
+        result_q: multiprocessing.SimpleQueue = multiprocessing.SimpleQueue()
+        process = multiprocessing.Process(
+            target=_run_aeneas_in_process,
+            args=(audio_path, paragraphs_path, raw_output_path, progress_q, result_q),
+        )
+        drain_task = asyncio.create_task(drain_and_tick())
+        try:
+            process.start()
+            await asyncio.to_thread(process.join)
+            outcome = result_q.get() if not result_q.empty() else RuntimeError(
+                f"aeneas process exited with code {process.exitcode} and no result"
+            )
+            if isinstance(outcome, Exception):
+                raise outcome
+            # Fragments are already on disk; load them directly to avoid pipe-size limits
+            with raw_output_path.open() as f:
+                raw_data = json.load(f)
+            fragments: list[dict[str, str]] = raw_data["fragments"]
+        finally:
+            drain_task.cancel()
+            try:
+                await drain_task
+            except asyncio.CancelledError:
+                logger.debug("drain_task cancelled cleanly")
+            except Exception:
+                logger.exception("drain_task exited with exception")
+            if process.is_alive():
+                process.terminate()
+                process.join()
+
+        while not progress_q.empty():
+            await self._update_status("aligning", progress=progress_q.get_nowait())
+
+        await self._update_status("aligning", progress=88, fragment_count=len(fragments))
         return fragments
 
     async def _assemble_sync_map(
@@ -555,7 +669,7 @@ class AlignmentPipeline:
         chapters: list[dict],  # type: ignore[type-arg]
         first_chapter_spine_pos: int,
     ) -> None:
-        await self._update_status("assembling", progress=90)
+        await self._update_status("assembling", progress=92)
 
         para_count = len(index)
         frag_count = len(fragments)
@@ -615,12 +729,15 @@ class AlignmentPipeline:
     def _cache_dir(self) -> Path:
         return Path(settings.alignment_cache_dir) / self.job.abs_item_id
 
-    async def _update_status(self, status: str, progress: int | None = None, **kwargs: object) -> None:
+    async def _update_status(
+        self, status: str, progress: int | None = None, **kwargs: object
+    ) -> None:
         self.job.status = status
         if progress is not None:
             self.job.progress = progress
         for k, v in kwargs.items():
             setattr(self.job, k, v)
+        logger.debug("_update_status: status=%s progress=%s", status, progress)
         await self.session.commit()
 
     async def _fail(self, message: str) -> None:

@@ -23,6 +23,7 @@ Project documentation lives in `docs/`:
 - [`docs/Frontend.md`](docs/Frontend.md) — Frontend design principles (theming, layout, accessibility)
 - [`docs/AudioBookEbookMapping.md`](docs/AudioBookEbookMapping.md) — Audiobook-ebook mapping and alignment
 - [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) — Alignment pipeline testing guide
+- [`docs/Sync.md`](docs/Sync.md) — Bidirectional ABS ↔ KOSync progress sync
 
 ## Rules
 

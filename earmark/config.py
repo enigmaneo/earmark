@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     kosync_host: str = "0.0.0.0"
     kosync_port: int = 8080
 
-    sync_interval_minutes: int = 5
+    sync_interval_seconds: int = 300
 
     ebook_source: str = "abs"  # "abs" | "cwa" | "local"
     cwa_url: str = ""
@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     ebook_local_root: str = "."
     alignment_cache_dir: str = ".cache/earmark"
 
+    log_level: str = "INFO"
     log_pretty: bool = False
 
 

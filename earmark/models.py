@@ -115,6 +115,7 @@ class AbsEbookMapping(Base):
         ForeignKey("alignment_jobs.id"), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="ebook_mappings")
     alignment_job: Mapped["AlignmentJob | None"] = relationship(lazy="joined")

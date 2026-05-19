@@ -19,9 +19,21 @@ class AudiobookshelfClient:
             timeout=10.0,
         )
 
-    async def get_progress(self, item_id: str) -> dict:  # type: ignore[type-arg]
-        # TODO: implement
-        raise NotImplementedError
+    async def get_progress(self, item_id: str) -> dict | None:  # type: ignore[type-arg]
+        response = await self._client.get(f"/api/me/progress/{item_id}")
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()  # type: ignore[no-any-return]
+
+    async def update_progress(
+        self, item_id: str, current_time: float, duration: float, progress: float
+    ) -> None:
+        response = await self._client.patch(
+            f"/api/me/progress/{item_id}",
+            json={"currentTime": current_time, "duration": duration, "progress": progress},
+        )
+        response.raise_for_status()
 
     async def get_item(self, item_id: str) -> dict:  # type: ignore[type-arg]
         response = await self._client.get(f"/api/items/{item_id}", params={"expanded": "1"})

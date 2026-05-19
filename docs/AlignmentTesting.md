@@ -27,6 +27,12 @@ AUDIOBOOKSHELF_URL=https://your-abs-server
 AUDIOBOOKSHELF_API_KEY=your-api-key
 ```
 
+To see detailed pipeline logging during a test run, also set:
+
+```
+LOG_LEVEL=DEBUG
+```
+
 ### 3. Obtain an ABS item ID and an EPUB file
 
 - **Item ID**: In the Audiobookshelf UI, open a book — the ID is the UUID in the URL (`/item/d07beaed-...`). The item must have audio files attached.
