@@ -263,34 +263,47 @@ The sync job logs `logger.warning(...)` and silently skips the update in the fol
 
 ## 7. Scheduler Integration
 
-The sync job runs on a fixed interval (default 5 minutes, configurable via `settings.sync_interval_minutes`) using APScheduler:
+The sync job runs on a fixed interval (default 5 minutes, configurable via the `SYNC_INTERVAL_SECONDS` env var) using APScheduler:
 
 ```python
 # earmark/scheduler.py
 async def sync_progress() -> None:
     logger.info("Running progress sync")
+    # Collect eligible mapping IDs in one session, then process each in its own
+    # session so a failure in one mapping doesn't corrupt the session for others.
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(AbsEbookMapping)
+            select(AbsEbookMapping.id)
             .join(AlignmentJob, AbsEbookMapping.alignment_job_id == AlignmentJob.id)
-            .options(selectinload(AbsEbookMapping.user).selectinload(User.kosync_users))
             .where(
                 AbsEbookMapping.kosync_document.isnot(None),
                 AlignmentJob.status == "complete",
                 AlignmentJob.sync_map_path.isnot(None),
             )
         )
-        abs_client = AudiobookshelfClient()
-        try:
-            for mapping in result.scalars():
-                await _sync_mapping(mapping, abs_client, session)
-        finally:
-            await abs_client.close()
+        mapping_ids = list(result.scalars())
+
+    abs_client = AudiobookshelfClient()
+    try:
+        for mapping_id in mapping_ids:
+            try:
+                async with AsyncSessionLocal() as session:
+                    mapping = (await session.execute(
+                        select(AbsEbookMapping)
+                        .options(selectinload(AbsEbookMapping.user).selectinload(User.kosync_users))
+                        .where(AbsEbookMapping.id == mapping_id)
+                    )).scalar_one_or_none()
+                    if mapping:
+                        await _sync_mapping(mapping, abs_client, session)
+            except Exception:
+                logger.exception("Error syncing mapping %s", mapping_id)
+    finally:
+        await abs_client.close()
 ```
 
-`_sync_mapping` handles one mapping end-to-end: fetching both sides, comparing timestamps, converting positions, applying the forward-only guard, and writing. Errors within a single mapping are caught and logged so that one failing mapping does not abort the entire sync run.
+`_sync_mapping` handles one mapping end-to-end: fetching both sides, comparing timestamps, converting positions, applying the forward-only guard, and writing. Each mapping runs inside its own `AsyncSessionLocal` context so that a session error on one mapping does not affect subsequent ones.
 
-The `AsyncSessionLocal` session factory is imported from `earmark.database` (line 7).
+The `AsyncSessionLocal` session factory is imported from `earmark.database`.
 
 ---
 
