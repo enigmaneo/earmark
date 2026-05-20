@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import logging
 import shutil
 from pathlib import Path
@@ -13,19 +12,7 @@ from earmark.database import get_session
 from earmark.earmark_auth import get_current_earmark_user
 from earmark.models import AbsEbookMapping, AbsLibraryItem, AlignmentJob, EbookMetadataCache, User
 from earmark.schemas import AbsItemSummary, EbookFileSummary, MappingCreate, MappingRead
-
-
-def _partial_md5(path: Path) -> str:
-    m = hashlib.md5()
-    offset = 256
-    for _ in range(12):
-        with path.open("rb") as f:
-            f.seek(offset)
-            chunk = f.read(1024)
-        if chunk:
-            m.update(chunk)
-        offset *= 4
-    return m.hexdigest()
+from earmark.utils import partial_md5
 from earmark.services.alignment import run_alignment_job
 from earmark.services.audiobookshelf import AudiobookshelfClient
 
@@ -278,7 +265,7 @@ async def create_mapping(
     full_path = Path(settings.ebook_local_root) / body.ebook_path
     kosync_document: str | None = None
     try:
-        kosync_document = await asyncio.to_thread(_partial_md5, full_path)
+        kosync_document = await asyncio.to_thread(partial_md5, full_path)
     except OSError:
         logger.error("Cannot read ebook file: %s", full_path, exc_info=True)
         raise HTTPException(status_code=500, detail="Could not read ebook file")

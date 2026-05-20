@@ -146,6 +146,26 @@ download step if the item hasn't changed.
 
 ---
 
+## ebook_hash.py
+
+Prints the KOReader-compatible partial MD5 hash of an ebook file.
+Use it to verify that earmark's stored `kosync_document` matches
+what KOReader will send in `PUT /syncs/progress`.
+
+### Running
+
+```bash
+uv run python testing/ebook_hash.py /path/to/book.epub
+```
+
+### Sample output
+
+```
+8b03a82761fae0ee6cd5a23700361e74
+```
+
+---
+
 ## Bruno collection
 
 A [Bruno](https://www.usebruno.com/) HTTP collection for manually testing the
