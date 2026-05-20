@@ -81,11 +81,20 @@ The sync map (`AlignmentJob.sync_map_path`) is a JSON array of entries linking a
     "id": "para_001",
     "audio_start": 142.3,
     "audio_end": 148.7,
-    "ebook_pos": "/body/DocFragment[3]/body/p[1]",
+    "ebook_pos": "/body/DocFragment[3]/body/section[1]/div[2]/p[1]",
     "text_snippet": "It was the best of times, it was the worst of times,"
   }
 ]
 ```
+
+**XPath format:** `ebook_pos` values reflect the **actual DOM hierarchy** of the EPUB HTML — every intermediate container element (`section`, `div`, `article`, etc.) is included and indexed among its same-tag siblings. This matches the format KOReader's CRE engine uses internally, so the position can be navigated to directly.
+
+For example, a paragraph nested inside a section and div produces:
+```
+/body/DocFragment[3]/body/section[1]/div[2]/p[1]
+```
+
+Not the flattened shorthand `/body/DocFragment[3]/body/p[N]`, which only works when `<p>` elements are direct children of `<body>`.
 
 ### 3a. ABS → KOSync
 
@@ -103,39 +112,43 @@ The sync map (`AlignmentJob.sync_map_path`) is a JSON array of entries linking a
 ```
 currentTime = 145.0, duration = 3600.0
 → matches para_001 (audio_start=142.3, audio_end=148.7)
-→ ebook_pos = "/body/DocFragment[3]/body/p[1]"
+→ ebook_pos = "/body/DocFragment[3]/body/section[1]/div[2]/p[1]"
 → percentage = 145.0 / 3600.0 = 0.0403
 ```
 
 ### 3b. KOSync → ABS
 
-**Input:** KOSync XPath string (e.g. `/body/DocFragment[15]/body/div[65]/text()[1].41`)
+**Input:** KOSync XPath string from KOReader (e.g. `/body/DocFragment[15]/body/section[1]/div[3].41`)
 
-KOReader uses more specific XPath than the sync map (which uses `/body/DocFragment[N]/body/tag[M]`). The conversion extracts the DocFragment index and element index from the KOReader XPath and finds the best-matching sync map entry.
+KOReader's CRE engine records positions in the same hierarchical XPath format as the sync map, but appends a **character offset** (`.N`) to the deepest element — this is the byte offset within that element's text content. For example:
+
+```
+/body/DocFragment[11]/body/section[1]/div.0
+```
+
+The `.0` means "character offset 0 within this div" (i.e., the beginning of the element). earmark strips this suffix before matching.
 
 **Algorithm:**
 
-1. Parse the DocFragment index `N` from the XPath using the pattern `/body/DocFragment[(\d+)]/`.
-2. Parse the element index `M` from the first element after `/body/` in the fragment body — match any tag name followed by `[\d+]` (e.g. `div[65]`, `p[12]`).
+1. Parse the DocFragment index `N` from the XPath using `/body/DocFragment[(\d+)]/`.
+2. Strip any trailing character-offset suffix (`.N`) from the XPath.
 3. Collect all sync map entries whose `ebook_pos` contains `DocFragment[N]`.
-4. Among those entries, parse the element index from each `ebook_pos` and find the entry with the closest element index to `M`.
-5. Return `audio_start` of that entry.
+4. Try an exact string match against the cleaned XPath. If found, return that entry's `audio_start`.
+5. Fallback: extract the deepest bracketed index from the path segment after `DocFragment[N]`. Find the sync map entry within `DocFragment[N]` whose deepest index is closest.
+6. Return `audio_start` of the best match.
 
 If step 3 produces no entries (DocFragment not found in sync map), log WARN and return `None` to skip the update.
 
 **Example:**
 
 ```
-XPath = "/body/DocFragment[3]/body/div[2]/text()[1].41"
-→ N = 3, M = 2
-→ sync map entries for DocFragment[3]:
-    para_001: ebook_pos="...p[1]" → element_index=1
-    para_002: ebook_pos="...p[2]" → element_index=2   ← closest to M=2
-    para_003: ebook_pos="...p[3]" → element_index=3
-→ return para_002.audio_start = 148.7
+XPath = "/body/DocFragment[3]/body/section[1]/div[2]/p[1].41"
+→ N = 3
+→ strip suffix → "/body/DocFragment[3]/body/section[1]/div[2]/p[1]"
+→ exact match found in sync map → return para_001.audio_start = 142.3
 ```
 
-**Note on DocFragment numbering:** `ebook_pos` values in the sync map use the 1-based index of each item in the EPUB spine (all items, including non-XHTML), matching KOReader's crengine DocFragment numbering. However, large logical chapters are sometimes split across multiple spine HTML files by publishers, meaning a single logical chapter may span several DocFragment indices. The element-index matching in step 4 accounts for this by matching within the correct DocFragment rather than assuming a chapter-per-DocFragment structure.
+**Note on DocFragment numbering:** `ebook_pos` values in the sync map use the 1-based index of each item in the EPUB spine (all items, including non-XHTML), matching KOReader's crengine DocFragment numbering. Large logical chapters are sometimes split across multiple spine HTML files by publishers, so a single logical chapter may span several DocFragment indices.
 
 ---
 

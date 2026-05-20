@@ -54,6 +54,28 @@ def _find_first_chapter_spine_pos(book: object, spine_items: list[str]) -> int:
     return _scan(book.toc) or 1  # type: ignore[union-attr]
 
 
+def _element_full_xpath(element: object) -> str:
+    """Return the XPath from <body> to element, matching KOReader's CRE format.
+
+    Each step counts the element's 1-based position among same-tag siblings at
+    that level, e.g. /body/section[1]/div[2]/p[3].
+    """
+    from bs4 import Tag
+    parts: list[str] = []
+    node = element
+    while isinstance(node, Tag) and node.name not in ("body", "html", "[document]"):
+        parent = node.parent
+        if not isinstance(parent, Tag) or parent.name in ("html", "[document]"):
+            break
+        tag = node.name
+        siblings = [s for s in parent.children if isinstance(s, Tag) and s.name == tag]
+        idx = siblings.index(node) + 1  # 1-based
+        parts.append(f"{tag}[{idx}]")
+        node = parent
+    parts.reverse()
+    return "/body/" + "/".join(parts)
+
+
 def _parse_epub_sync(epub_path: Path) -> tuple[list[str], dict[str, dict[str, str]], int]:
     import ebooklib
     from bs4 import BeautifulSoup
@@ -78,15 +100,13 @@ def _parse_epub_sync(epub_path: Path) -> tuple[list[str], dict[str, dict[str, st
         # Skip table-of-contents pages — they're not narrated in audiobooks.
         if soup.find(attrs={"role": "doc-toc"}):
             continue
-        tag_counters: dict[str, int] = {}
         for element in soup.find_all(_BLOCK_TAGS):
             text = element.get_text(separator=" ").strip()
             if not text:
                 continue
-            tag_name = element.name
-            tag_counters[tag_name] = tag_counters.get(tag_name, 0) + 1
             para_id = f"para_{seq:03d}"
-            ebook_pos = f"/body/DocFragment[{spine_pos}]/body/{tag_name}[{tag_counters[tag_name]}]"
+            rel_path = _element_full_xpath(element)
+            ebook_pos = f"/body/DocFragment[{spine_pos}]{rel_path}"
             index[para_id] = {"text": text, "ebook_pos": ebook_pos}
             paragraphs.append(text)
             seq += 1
