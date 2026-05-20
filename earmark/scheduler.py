@@ -108,7 +108,7 @@ async def _write_abs_to_kosync(
             kosync_user_id=ku.id,
             document=mapping.kosync_document,
             progress=ebook_pos,
-            percentage=round(new_pct, 2),
+            percentage=new_pct,
             device=_SYNC_DEVICE,
             device_id=_SYNC_DEVICE,
             title=mapping.abs_title,
