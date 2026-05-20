@@ -1,9 +1,12 @@
 import asyncio
 import hashlib
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
+from earmark.config import settings
 from earmark.database import AsyncSessionLocal, Base, engine, init_db
 from earmark.earmark_auth import hash_password
 from earmark.models import AbsEbookMapping, AbsLibraryItem, KosyncUser, ReadingProgress, User
@@ -504,6 +507,7 @@ async def seed() -> None:
                 title=p.get("title"),
                 authors=p.get("authors"),
                 is_latest=p.get("is_latest", True),
+                updated_at=datetime.now(ZoneInfo(settings.timezone)),
             )
             session.add(record)
             print(f"  Created progress: {p['title']} for {p['username']}")

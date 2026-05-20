@@ -45,9 +45,7 @@ class ReadingProgress(Base):
     title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     authors: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_latest: Mapped[bool] = mapped_column(Boolean, default=True)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now()
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     kosync_user: Mapped["KosyncUser"] = relationship(back_populates="progress")
 
