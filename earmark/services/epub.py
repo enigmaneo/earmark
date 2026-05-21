@@ -2,6 +2,9 @@ import logging
 import re
 from pathlib import Path
 
+import ebooklib
+from bs4 import BeautifulSoup, Tag
+from ebooklib import epub
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,14 +18,15 @@ _TEXT_NODE_SUFFIX_RE = re.compile(r"/text\(\)(?:\[\d+\])?(?:\.\d+)?$")
 _SEGMENT_RE = re.compile(r"^(\w+)(?:\[(\d+)\])?$")
 
 
-def _parse_path_steps(path: str) -> list[tuple[str, int]]:
+def _parse_path_steps(path: str) -> list[tuple[str, int]] | None:
     steps = []
     for seg in path.split("/"):
         if not seg:
             continue
         m = _SEGMENT_RE.match(seg)
-        if m:
-            steps.append((m.group(1), int(m.group(2)) if m.group(2) else 1))
+        if not m:
+            return None
+        steps.append((m.group(1), int(m.group(2)) if m.group(2) else 1))
     return steps
 
 
@@ -33,16 +37,13 @@ def validate_progress_position(epub_path: Path, position: str) -> bool:
     """
     m = _DOCFRAGMENT_RE.match(position)
     if not m:
+        # KOReader always emits DocFragment paths; any other format is malformed
         return False
 
     spine_pos = int(m.group(1))  # 1-based
     rel_path = m.group(2)
 
     try:
-        import ebooklib
-        from bs4 import BeautifulSoup, Tag
-        from ebooklib import epub
-
         book = epub.read_epub(str(epub_path), options={"ignore_ncx": True})
         spine_items = [item_id for item_id, _ in book.spine]
 
@@ -56,6 +57,8 @@ def validate_progress_position(epub_path: Path, position: str) -> bool:
         clean_path = _TEXT_NODE_SUFFIX_RE.sub("", rel_path)
         steps = _parse_path_steps(clean_path)
 
+        if steps is None:
+            return False
         if not steps:
             return True
 
