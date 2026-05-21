@@ -1,3 +1,4 @@
+import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,6 +16,7 @@ from earmark.schemas import (
     ProgressResponse,
     ProgressUpsert,
 )
+from earmark.services.epub import find_epub_for_document, validate_progress_position
 from earmark.services.progress import write_reading_progress
 
 router = APIRouter(prefix="/syncs", tags=["syncs"])
@@ -53,6 +55,12 @@ async def upsert_progress(
     user: KosyncUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ProgressResponse:
+    epub_path = await find_epub_for_document(session, user.user_id, body.document)
+    if epub_path is not None:
+        valid = await asyncio.to_thread(validate_progress_position, epub_path, body.progress)
+        if not valid:
+            raise HTTPException(status_code=422, detail="Progress position does not exist in the EPUB")
+
     record = await write_reading_progress(
         session,
         kosync_user_id=user.id,
