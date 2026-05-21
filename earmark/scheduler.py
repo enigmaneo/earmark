@@ -53,7 +53,7 @@ def _audio_to_kosync(
 
 
 _DOCFRAG_RE = re.compile(r"/body/DocFragment\[(\d+)\]")
-_ELEM_RE = re.compile(r"/body/\w+\[(\d+)\]")
+_BRACKET_IDX_RE = re.compile(r"\[(\d+)\]")
 
 
 def _kosync_to_audio(
@@ -64,18 +64,29 @@ def _kosync_to_audio(
         return None
     n = int(frag_match.group(1))
 
-    elem_match = _ELEM_RE.search(xpath)
-    m = int(elem_match.group(1)) if elem_match else 1
-
     candidates = [e for e in sync_map if f"DocFragment[{n}]" in e["ebook_pos"]]
     if not candidates:
         return None
 
-    def _elem_index(entry: dict[str, Any]) -> int:
-        em = _ELEM_RE.search(entry["ebook_pos"])
-        return int(em.group(1)) if em else 1
+    # Strip KOReader's character-offset suffix (e.g. "div.42" → "div").
+    clean_xpath = re.sub(r"\.\d+$", "", xpath)
 
-    best = min(candidates, key=lambda e: abs(_elem_index(e) - m))
+    # Try exact match first (works when both sides use hierarchical XPaths).
+    for entry in candidates:
+        if entry["ebook_pos"] == clean_xpath:
+            return float(entry["audio_start"])
+
+    # Fallback: compare deepest bracketed index in the path after DocFragment[n].
+    after_frag = clean_xpath.split(f"DocFragment[{n}]", 1)[-1]
+    indices = _BRACKET_IDX_RE.findall(after_frag)
+    m = int(indices[-1]) if indices else 1
+
+    def _deepest_idx(entry: dict[str, Any]) -> int:
+        af = entry["ebook_pos"].split(f"DocFragment[{n}]", 1)[-1]
+        idxs = _BRACKET_IDX_RE.findall(af)
+        return int(idxs[-1]) if idxs else 1
+
+    best = min(candidates, key=lambda e: abs(_deepest_idx(e) - m))
     return float(best["audio_start"])
 
 
@@ -204,7 +215,7 @@ async def _sync_mapping(
     # Skip if neither side has changed since last sync
     if abs_data is not None and ko_progress is not None and mapping.last_synced_at is not None:
         abs_ts = datetime.fromtimestamp(abs_data["lastUpdate"] / 1000, tz=UTC)
-        ko_ts = _ensure_utc(ko_progress.updated_at)
+        ko_ts = ko_progress.updated_at.astimezone(UTC)
         last = _ensure_utc(mapping.last_synced_at)
         if abs_ts <= last and ko_ts <= last:
             logger.debug("Skipping %s: no changes since last sync (%s)", abs_item_id, last)
@@ -217,7 +228,7 @@ async def _sync_mapping(
         await _write_kosync_to_abs(mapping, ko_progress, None, abs_client, sync_map, session)
     else:
         abs_ts = datetime.fromtimestamp(abs_data["lastUpdate"] / 1000, tz=UTC)
-        ko_ts = _ensure_utc(ko_progress.updated_at)
+        ko_ts = ko_progress.updated_at.astimezone(UTC)
         if abs_ts == ko_ts:
             return
         if abs_ts > ko_ts:

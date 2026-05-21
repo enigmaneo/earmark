@@ -23,10 +23,10 @@ DOCUMENT = "aabbccdd" * 4  # 32-char fake MD5
 ABS_ITEM_ID = "li_test001"
 
 SYNC_MAP = [
-    {"id": "p0", "audio_start": 0.0, "audio_end": 100.0, "ebook_pos": "/body/DocFragment[1]/body/p[1]", "text_snippet": "A"},
-    {"id": "p1", "audio_start": 100.0, "audio_end": 200.0, "ebook_pos": "/body/DocFragment[2]/body/p[1]", "text_snippet": "B"},
-    {"id": "p2", "audio_start": 200.0, "audio_end": 300.0, "ebook_pos": "/body/DocFragment[3]/body/p[2]", "text_snippet": "C"},
-    {"id": "p3", "audio_start": 300.0, "audio_end": 400.0, "ebook_pos": "/body/DocFragment[3]/body/p[4]", "text_snippet": "D"},
+    {"id": "p0", "audio_start": 0.0, "audio_end": 100.0, "ebook_pos": "/body/DocFragment[1]/body/section[1]/p[1]", "text_snippet": "A"},
+    {"id": "p1", "audio_start": 100.0, "audio_end": 200.0, "ebook_pos": "/body/DocFragment[2]/body/section[1]/p[1]", "text_snippet": "B"},
+    {"id": "p2", "audio_start": 200.0, "audio_end": 300.0, "ebook_pos": "/body/DocFragment[3]/body/section[1]/p[2]", "text_snippet": "C"},
+    {"id": "p3", "audio_start": 300.0, "audio_end": 400.0, "ebook_pos": "/body/DocFragment[3]/body/section[1]/p[4]", "text_snippet": "D"},
 ]
 
 DURATION = 400.0
@@ -99,24 +99,24 @@ async def test_write_reading_progress_demotes_previous(db_session_factory: async
 
 def test_audio_to_kosync_mid_entry() -> None:
     pos, pct = _audio_to_kosync(50.0, DURATION, SYNC_MAP)
-    assert pos == "/body/DocFragment[1]/body/p[1]"
+    assert pos == "/body/DocFragment[1]/body/section[1]/p[1]"
     assert pct == pytest.approx(50.0 / DURATION)
 
 
 def test_audio_to_kosync_exact_boundary() -> None:
     pos, pct = _audio_to_kosync(100.0, DURATION, SYNC_MAP)
-    assert pos == "/body/DocFragment[2]/body/p[1]"
+    assert pos == "/body/DocFragment[2]/body/section[1]/p[1]"
 
 
 def test_audio_to_kosync_past_end_clamps_to_last() -> None:
     pos, pct = _audio_to_kosync(999.0, DURATION, SYNC_MAP)
-    assert pos == "/body/DocFragment[3]/body/p[4]"
+    assert pos == "/body/DocFragment[3]/body/section[1]/p[4]"
     assert pct == pytest.approx(999.0 / DURATION)
 
 
 def test_audio_to_kosync_start_of_map() -> None:
     pos, pct = _audio_to_kosync(0.0, DURATION, SYNC_MAP)
-    assert pos == "/body/DocFragment[1]/body/p[1]"
+    assert pos == "/body/DocFragment[1]/body/section[1]/p[1]"
     assert pct == pytest.approx(0.0)
 
 
@@ -126,20 +126,33 @@ def test_audio_to_kosync_start_of_map() -> None:
 
 
 def test_kosync_to_audio_exact_match() -> None:
-    xpath = "/body/DocFragment[2]/body/p[1]"
+    # Hierarchical XPath matching exactly an entry in the sync map.
+    xpath = "/body/DocFragment[2]/body/section[1]/p[1]"
+    result = _kosync_to_audio(xpath, SYNC_MAP)
+    assert result == pytest.approx(100.0)
+
+
+def test_kosync_to_audio_char_offset_stripped_before_match() -> None:
+    # KOReader appends a character offset (.N) to its positions; it must be
+    # stripped before the exact-match attempt.
+    xpath = "/body/DocFragment[2]/body/section[1]/p[1].41"
     result = _kosync_to_audio(xpath, SYNC_MAP)
     assert result == pytest.approx(100.0)
 
 
 def test_kosync_to_audio_closest_element() -> None:
-    # DocFragment[3] has p[2] (200s) and p[4] (300s); element index 3 → closest is p[2] or p[4]
-    xpath = "/body/DocFragment[3]/body/div[3]"
+    # DocFragment[3] has section[1]/p[2] (200s) and section[1]/p[4] (300s).
+    # An xpath with deepest index 3 is equidistant; min() picks the first candidate.
+    xpath = "/body/DocFragment[3]/body/section[1]/div[3]"
     result = _kosync_to_audio(xpath, SYNC_MAP)
     # |3-2| == 1, |3-4| == 1 — tie broken by min() which picks first
     assert result == pytest.approx(200.0)
 
 
-def test_kosync_to_audio_koreader_style_xpath() -> None:
+def test_kosync_to_audio_koreader_fallback_different_tag() -> None:
+    # KOReader may send a position whose tag doesn't exist in the sync map for
+    # that DocFragment. The fallback uses the deepest bracketed index to find
+    # the closest entry.
     xpath = "/body/DocFragment[1]/body/div[1]/text()[1].41"
     result = _kosync_to_audio(xpath, SYNC_MAP)
     assert result == pytest.approx(0.0)

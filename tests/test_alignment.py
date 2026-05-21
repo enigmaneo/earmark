@@ -8,7 +8,50 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from earmark.services.alignment import run_alignment_job
+from bs4 import BeautifulSoup
+
+from earmark.services.alignment import _element_full_xpath, run_alignment_job
+
+
+# ── _element_full_xpath ────────────────────────────────────────────────────────
+
+
+def _find(html: str, tag: str, **kwargs: str) -> object:
+    return BeautifulSoup(html, "html.parser").find(tag, **kwargs)
+
+
+def test_element_full_xpath_direct_child_of_body() -> None:
+    html = "<html><body><p>text</p></body></html>"
+    el = BeautifulSoup(html, "html.parser").find("p")
+    assert _element_full_xpath(el) == "/body/p[1]"
+
+
+def test_element_full_xpath_sibling_index() -> None:
+    html = "<html><body><p>one</p><p>two</p><p>three</p></body></html>"
+    soup = BeautifulSoup(html, "html.parser")
+    ps = soup.find_all("p")
+    assert _element_full_xpath(ps[0]) == "/body/p[1]"
+    assert _element_full_xpath(ps[1]) == "/body/p[2]"
+    assert _element_full_xpath(ps[2]) == "/body/p[3]"
+
+
+def test_element_full_xpath_nested_structure() -> None:
+    html = "<html><body><section><div><p>text</p></div></section></body></html>"
+    el = BeautifulSoup(html, "html.parser").find("p")
+    assert _element_full_xpath(el) == "/body/section[1]/div[1]/p[1]"
+
+
+def test_element_full_xpath_mixed_siblings() -> None:
+    html = (
+        "<html><body>"
+        "<section><div><p>a</p><p>b</p></div><div><p>c</p></div></section>"
+        "</body></html>"
+    )
+    soup = BeautifulSoup(html, "html.parser")
+    ps = soup.find_all("p")
+    assert _element_full_xpath(ps[0]) == "/body/section[1]/div[1]/p[1]"
+    assert _element_full_xpath(ps[1]) == "/body/section[1]/div[1]/p[2]"
+    assert _element_full_xpath(ps[2]) == "/body/section[1]/div[2]/p[1]"
 
 
 # ── fixtures ───────────────────────────────────────────────────────────────────
@@ -49,8 +92,8 @@ ABS_METADATA: dict[str, Any] = {
 
 FAKE_PARAGRAPHS = ["First paragraph.", "Second paragraph."]
 FAKE_INDEX = {
-    "para_000": {"text": "First paragraph.", "ebook_pos": "/body/DocFragment[1]/body/p[1]"},
-    "para_001": {"text": "Second paragraph.", "ebook_pos": "/body/DocFragment[1]/body/p[2]"},
+    "para_000": {"text": "First paragraph.", "ebook_pos": "/body/DocFragment[1]/body/section[1]/p[1]"},
+    "para_001": {"text": "Second paragraph.", "ebook_pos": "/body/DocFragment[1]/body/section[1]/p[2]"},
 }
 FAKE_FRAGMENTS: list[dict[str, str]] = [
     {"begin": "0.000", "end": "3.500"},
@@ -215,7 +258,7 @@ async def test_full_pipeline_happy_path(
     assert len(entries) == 2
     assert entries[0]["id"] == "para_000"
     assert entries[0]["audio_start"] == 10.0  # 0.0 + 10.0 offset from chapter[1].start
-    assert entries[0]["ebook_pos"] == "/body/DocFragment[1]/body/p[1]"
+    assert entries[0]["ebook_pos"] == "/body/DocFragment[1]/body/section[1]/p[1]"
 
     resp = await client.get(f"/alignment/jobs/{job_id}", headers=jwt_headers)
     assert resp.json()["audio_offset_seconds"] == 10.0

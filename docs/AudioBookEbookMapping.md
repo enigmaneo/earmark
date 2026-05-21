@@ -352,24 +352,29 @@ As paragraphs are extracted, an in-memory index maps each ID to its text and EPU
 ```python
 index: dict[str, dict] = {}
 
-for seq, (doc_filename, p_tag, text) in enumerate(paragraphs, start=1):
+for seq, (doc_filename, element, text) in enumerate(paragraphs, start=1):
     para_id = f"para_{seq:03d}"
     spine_pos = spine_index[doc_filename]   # 1-based position in EPUB spine
-    p_pos = p_tag_position_in_doc(p_tag)    # 1-based position among <p> tags in this doc
+    rel_path = _element_full_xpath(element) # full path from <body> to element
 
     index[para_id] = {
         "text": text,
-        "ebook_pos": f"/body/DocFragment[{spine_pos}]/body/p[{p_pos}]",
+        "ebook_pos": f"/body/DocFragment[{spine_pos}]{rel_path}",
         "chapter_file": doc_filename,
     }
 ```
 
 **`ebook_pos` construction:**
 - `DocFragment[N]` — the 1-based index of the HTML document within the EPUB spine
-- `p[N]` — the 1-based position of this `<p>` element among all `<p>` elements in that document
+- The remainder is the **full hierarchical path** from `<body>` to the block element, built by `_element_full_xpath`. At each ancestor level, the element's position is counted among its same-tag siblings (1-based).
 
-Example: the third paragraph in the second spine document →
-`/body/DocFragment[2]/body/p[3]`
+This produces a path that mirrors the actual DOM structure of the EPUB HTML, for example:
+
+```
+/body/DocFragment[2]/body/section[1]/div[2]/p[3]
+```
+
+This format is critical: KOReader's CRE engine navigates positions using the real DOM tree, so the XPath must match the actual nesting of the HTML. A flattened path like `/body/DocFragment[2]/body/p[3]` only works when `<p>` elements are direct children of `<body>`, which is uncommon in commercial EPUBs.
 
 ---
 
@@ -384,9 +389,9 @@ EPUB spine (reading order)
   │
   ▼
 Extract paragraphs → assign IDs in order
-  para_001  "It was the best of times..."     ebook_pos = /body/DocFragment[1]/body/p[1]
-  para_002  "it was the worst of times..."    ebook_pos = /body/DocFragment[1]/body/p[2]
-  para_003  "it was the age of wisdom..."     ebook_pos = /body/DocFragment[1]/body/p[3]
+  para_001  "It was the best of times..."     ebook_pos = /body/DocFragment[1]/body/section[1]/p[1]
+  para_002  "it was the worst of times..."    ebook_pos = /body/DocFragment[1]/body/section[1]/p[2]
+  para_003  "it was the age of wisdom..."     ebook_pos = /body/DocFragment[1]/body/section[1]/p[3]
   │
   ▼
 Write paragraphs.txt in the SAME order (line N = para_N)
@@ -403,9 +408,9 @@ aeneas returns fragments in the SAME order (fragment[i] = line i+1)
   ▼
 Merge: fragment[i] → para_{i+1:03d} → index[para_id].ebook_pos
 
-  para_001: audio 0.000–5.210   ebook_pos /body/DocFragment[1]/body/p[1]
-  para_002: audio 5.210–12.100  ebook_pos /body/DocFragment[1]/body/p[2]
-  para_003: audio 12.100–18.700 ebook_pos /body/DocFragment[1]/body/p[3]
+  para_001: audio 0.000–5.210   ebook_pos /body/DocFragment[1]/body/section[1]/p[1]
+  para_002: audio 5.210–12.100  ebook_pos /body/DocFragment[1]/body/section[1]/p[2]
+  para_003: audio 12.100–18.700 ebook_pos /body/DocFragment[1]/body/section[1]/p[3]
 ```
 
 **Invariant to preserve:** `paragraphs.txt` must be written in exactly the same order the IDs were assigned during extraction. aeneas guarantees its output fragments are in input line order. Therefore `fragment[N-1]` unambiguously maps to `para_{N:03d}` without any text matching or fuzzy lookup.
@@ -636,14 +641,14 @@ for entry in chapter_entries:
     "id": "para_001",
     "audio_start": 0.000,
     "audio_end": 5.210,
-    "ebook_pos": "/body/DocFragment[1]/body/p[1]",
+    "ebook_pos": "/body/DocFragment[1]/body/section[1]/p[1]",
     "text_snippet": "It was the best of times, it was the worst of times,"
   },
   {
     "id": "para_002",
     "audio_start": 5.210,
     "audio_end": 12.100,
-    "ebook_pos": "/body/DocFragment[1]/body/p[2]",
+    "ebook_pos": "/body/DocFragment[1]/body/section[1]/p[2]",
     "text_snippet": "it was the age of wisdom, it was the age of foolishness,"
   }
 ]
@@ -654,8 +659,10 @@ for entry in chapter_entries:
 | `id` | string | Sequential paragraph ID (`para_001`, `para_002`, …) |
 | `audio_start` | float | Start of aligned audio segment in seconds |
 | `audio_end` | float | End of aligned audio segment in seconds |
-| `ebook_pos` | string | XPath-style EPUB position: `/body/DocFragment[spine_index]/body/p[p_index]` |
+| `ebook_pos` | string | Full hierarchical XPath to the element: `/body/DocFragment[spine_index]/body/<ancestor_path>/<tag>[sibling_index]` |
 | `text_snippet` | string | The paragraph text as extracted from the EPUB |
+
+**XPath format detail:** each step in `ebook_pos` after `DocFragment[N]` corresponds to a real ancestor element in the EPUB HTML, with the element's 1-based index among same-tag siblings at that level. KOReader's CRE engine uses this same format when recording its own reading position. The paths are compatible in both directions — earmark writes positions KOReader can navigate to, and earmark can parse positions KOReader sends back (after stripping any trailing character-offset suffix such as `.0`).
 
 The array is ordered by `audio_start` (ascending), which matches EPUB reading order provided the ebook and audio are aligned chapter-for-chapter.
 
