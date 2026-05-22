@@ -140,5 +140,6 @@ class MappingRead(BaseModel):
     sync_progress: int | None = None
     sync_error: str | None = None
     cache_intact: bool | None = None
+    reading_percentage: float | None = None
 
     model_config = ConfigDict(from_attributes=True)

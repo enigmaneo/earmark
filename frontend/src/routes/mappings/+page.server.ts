@@ -72,7 +72,18 @@ export const actions: Actions = {
 		if (res.status === 409) return fail(409, { error: 'This mapping already exists' });
 		if (!res.ok) return fail(res.status, { error: 'Failed to create mapping' });
 
-		const mapping = await res.json();
+		const mapping = (await res.json()) as MappingRead;
+
+		// Automatically kick off alignment after creating the mapping
+		const syncRes = await fetch(`${BACKEND}/web/mappings/${mapping.id}/sync`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${token}` },
+		});
+		if (syncRes.ok) {
+			const synced = (await syncRes.json()) as MappingRead;
+			return { created: synced };
+		}
+
 		return { created: mapping };
 	},
 

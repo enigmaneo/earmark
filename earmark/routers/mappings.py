@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from earmark.config import settings
 from earmark.database import get_session
 from earmark.earmark_auth import get_current_earmark_user
-from earmark.models import AbsEbookMapping, AbsLibraryItem, AlignmentJob, EbookMetadataCache, User
+from earmark.models import AbsEbookMapping, AbsLibraryItem, AlignmentJob, EbookMetadataCache, KosyncUser, ReadingProgress, User
 from earmark.schemas import AbsItemSummary, EbookFileSummary, MappingCreate, MappingRead
 from earmark.utils import partial_md5
 from earmark.services.alignment import run_alignment_job
@@ -33,7 +33,11 @@ def _check_cache_intact(abs_item_id: str, lib_item: AbsLibraryItem | None) -> bo
     return sentinel.read_text().strip() == lib_item.abs_updated_at.isoformat()
 
 
-def _mapping_to_schema(m: AbsEbookMapping, lib_item: AbsLibraryItem | None) -> MappingRead:
+def _mapping_to_schema(
+    m: AbsEbookMapping,
+    lib_item: AbsLibraryItem | None,
+    reading_percentage: float | None = None,
+) -> MappingRead:
     job = m.alignment_job
     return MappingRead(
         id=m.id,
@@ -50,6 +54,7 @@ def _mapping_to_schema(m: AbsEbookMapping, lib_item: AbsLibraryItem | None) -> M
         sync_progress=job.progress if job else None,
         sync_error=job.error_message if job else None,
         cache_intact=_check_cache_intact(m.abs_item_id, lib_item),
+        reading_percentage=reading_percentage,
     )
 
 
@@ -243,7 +248,24 @@ async def list_mappings(
     )
     lib_by_id = {li.abs_item_id: li for li in lib_result.scalars().all()}
 
-    return [_mapping_to_schema(m, lib_by_id.get(m.abs_item_id)) for m in mappings]
+    kosync_docs = [m.kosync_document for m in mappings if m.kosync_document]
+    progress_by_doc: dict[str, float] = {}
+    if kosync_docs:
+        progress_result = await session.execute(
+            select(ReadingProgress)
+            .join(KosyncUser, ReadingProgress.kosync_user_id == KosyncUser.id)
+            .where(
+                KosyncUser.user_id == user.id,
+                ReadingProgress.document.in_(kosync_docs),
+                ReadingProgress.is_latest == True,
+            )
+        )
+        progress_by_doc = {r.document: r.percentage for r in progress_result.scalars().all()}
+
+    return [
+        _mapping_to_schema(m, lib_by_id.get(m.abs_item_id), progress_by_doc.get(m.kosync_document or ""))
+        for m in mappings
+    ]
 
 
 @router.post("/mappings", response_model=MappingRead, status_code=201)

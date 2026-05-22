@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { enhance } from '$app/forms';
+	import { goto } from '$app/navigation';
 	import type { AbsItemSummary, EbookFileSummary, MappingRead } from '$lib/api';
 	import type { ActionData, PageData } from './$types';
 	import { toaster } from '$lib/toaster';
@@ -10,6 +11,8 @@
 	let mappings = $state<MappingRead[]>([]);
 	let selectedAbsItemId = $state<string>('');
 	let selectedEbookPath = $state<string>('');
+	let showSyncConfirmModal = $state(false);
+	let addFormEl = $state<HTMLFormElement | null>(null);
 
 	let selectedAbs = $derived(
 		(data.absItems as AbsItemSummary[]).find((a) => a.abs_item_id === selectedAbsItemId) ?? null
@@ -95,6 +98,12 @@
 			}
 		};
 	});
+
+	function handleRowClick(m: MappingRead) {
+		if (m.kosync_document) {
+			goto(`/?document=${m.kosync_document}`);
+		}
+	}
 </script>
 
 <div class="container mx-auto max-w-5xl space-y-8 p-6">
@@ -114,15 +123,18 @@
 		{/if}
 
 		<form
+			bind:this={addFormEl}
 			method="POST"
 			action="?/createMapping"
 			use:enhance={() => {
 				return async ({ result, update }) => {
+					showSyncConfirmModal = false;
 					if (result.type === 'success' && result.data?.created) {
 						mappings = [result.data.created as MappingRead, ...mappings];
 						selectedAbsItemId = '';
 						selectedEbookPath = '';
-						toaster.create({ type: 'success', title: 'Mapping added' });
+						startPolling();
+						toaster.create({ type: 'success', title: 'Mapping added — alignment started' });
 					} else {
 						await update();
 					}
@@ -171,9 +183,10 @@
 
 			<div class="flex justify-end sm:col-span-2">
 				<button
-					type="submit"
+					type="button"
 					class="btn variant-filled-primary"
 					disabled={!selectedAbsItemId || !selectedEbookPath}
+					onclick={() => (showSyncConfirmModal = true)}
 				>
 					Add
 				</button>
@@ -187,8 +200,7 @@
 				<tr>
 					<th>Audiobook</th>
 					<th>Author</th>
-					<th>KOSync Hash</th>
-					<th>Cache</th>
+					<th>Mapping</th>
 					<th>Progress</th>
 					<th>Created</th>
 					<th></th>
@@ -196,44 +208,40 @@
 			</thead>
 			<tbody>
 				{#each mappings as m (m.id)}
-					<tr>
+					<tr
+						class="hover:bg-surface-200-800 transition-colors {m.kosync_document ? 'cursor-pointer' : ''}"
+						onclick={() => handleRowClick(m)}
+					>
 						<td class="max-w-xs truncate">{m.abs_title}</td>
 						<td class="max-w-xs truncate">{m.abs_author ?? '—'}</td>
-						<td class="font-mono text-xs">
-							{#if m.kosync_document}
-								<a href="/?document={m.kosync_document}" class="anchor">{m.kosync_document.slice(0, 8)}…</a>
-							{:else}
-								—
-							{/if}
-						</td>
 						<td>
-							{#if m.cache_intact === true}
-								<span class="badge variant-filled-success text-xs">Cached</span>
-							{:else if m.cache_intact === false}
-								<span class="badge variant-filled-warning text-xs">Stale</span>
+							{#if ACTIVE_STATUSES.has(m.sync_status ?? '')}
+								<span class="text-xs tabular-nums">{m.sync_progress ?? 0}%</span>
+							{:else if m.sync_status === 'failed'}
+								<span class="badge variant-filled-error text-xs" title={m.sync_error ?? undefined}>Failed</span>
+							{:else if m.cache_intact === true || m.sync_status === 'complete'}
+								<span class="badge variant-filled-success text-xs">Mapped</span>
 							{:else}
-								<span class="text-surface-400 text-xs">—</span>
+								<span class="badge variant-filled-warning text-xs">Unmapped</span>
 							{/if}
 						</td>
 						<td class="min-w-[140px]">
-							{#if m.sync_status === 'failed'}
-								<span class="badge variant-filled-error text-xs" title={m.sync_error ?? undefined}>Failed</span>
-							{:else if m.sync_progress != null}
+							{#if m.reading_percentage != null}
 								<div class="flex items-center gap-2">
 									<div class="bg-surface-300 h-2 flex-1 overflow-hidden rounded-full">
 										<div
 											class="bg-primary-500 h-2 rounded-full transition-all duration-500"
-											style="width: {m.sync_progress}%"
+											style="width: {m.reading_percentage * 100}%"
 										></div>
 									</div>
-									<span class="w-8 text-right text-xs tabular-nums">{m.sync_progress}%</span>
+									<span class="w-8 text-right text-xs tabular-nums">{Math.round(m.reading_percentage * 100)}%</span>
 								</div>
 							{:else}
 								<span class="text-surface-400 text-xs">—</span>
 							{/if}
 						</td>
 						<td>{formatDate(m.created_at)}</td>
-						<td class="flex gap-2">
+						<td class="flex gap-2" onclick={(e) => e.stopPropagation()}>
 							<form
 								method="POST"
 								action="?/syncMapping"
@@ -281,7 +289,7 @@
 					</tr>
 				{:else}
 					<tr>
-						<td colspan="8" class="text-center text-surface-500">
+						<td colspan="6" class="text-center text-surface-500">
 							No mappings yet. Add one above.
 						</td>
 					</tr>
@@ -290,3 +298,38 @@
 		</table>
 	</div>
 </div>
+
+{#if showSyncConfirmModal}
+	<div
+		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+		role="dialog"
+		aria-modal="true"
+		aria-labelledby="sync-confirm-title"
+	>
+		<div class="card bg-surface-100-900 w-full max-w-md space-y-6 p-6 shadow-xl">
+			<h2 class="h3" id="sync-confirm-title">Begin Alignment</h2>
+			<p class="text-surface-700-300 text-sm leading-relaxed">
+				Adding this mapping will immediately begin the alignment process, which analyzes and
+				synchronizes your audiobook and ebook. This process may take several minutes depending on
+				the length of the audiobook. Please ensure you have a stable connection before proceeding.
+			</p>
+			<p class="text-surface-700-300 text-sm">Would you like to proceed?</p>
+			<div class="flex justify-end gap-3">
+				<button
+					type="button"
+					class="btn variant-ghost"
+					onclick={() => (showSyncConfirmModal = false)}
+				>
+					Cancel
+				</button>
+				<button
+					type="button"
+					class="btn variant-filled-primary"
+					onclick={() => addFormEl?.requestSubmit()}
+				>
+					Proceed
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
