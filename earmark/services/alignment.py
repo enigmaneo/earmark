@@ -29,6 +29,11 @@ _FRONT_MATTER_TITLES: frozenset[str] = frozenset({
     "half title", "halftitle",
 })
 
+ACTIVE_STATUSES: frozenset[str] = frozenset({
+    "pending", "fetching_audio", "fetching_ebook",
+    "parsing_epub", "aligning", "assembling",
+})
+
 
 def _find_first_chapter_spine_pos(book: object, spine_items: list[str]) -> int:
     """Return 1-based spine position of the first non-front-matter TOC entry."""
@@ -705,7 +710,10 @@ class AlignmentPipeline:
 
         sync_map = []
         count = min(para_count, frag_count)
-        para_ids = sorted(index.keys())[:count]
+        # index is built in seq order in _parse_epub_sync; dicts preserve insertion order.
+        # Do NOT sort lexicographically — for books with ≥1000 paragraphs, "para_1000"
+        # sorts before "para_101", scrambling the fragment→para_id mapping.
+        para_ids = list(index.keys())[:count]
 
         for i, para_id in enumerate(para_ids):
             fragment = fragments[i]
@@ -724,6 +732,19 @@ class AlignmentPipeline:
             logger.info("Applied chapter start offset %.2fs to all sync map entries", chapter_start)
 
         _rescale_to_chapters(sync_map, chapters, first_chapter_spine_pos)
+
+        # Drop fragments aeneas couldn't align: it places them at begin==end==audio_duration.
+        # Typical cause: EPUB back matter (Acknowledgments, About the Author, Copyright)
+        # that the audiobook doesn't narrate.
+        before = len(sync_map)
+        sync_map = [e for e in sync_map if e["audio_start"] != e["audio_end"]]
+        dropped = before - len(sync_map)
+        if dropped:
+            logger.warning(
+                "Dropped %d unaligned sync map entries (audio_start == audio_end); "
+                "EPUB likely has content beyond the audio range",
+                dropped,
+            )
 
         sync_map_path = cache_dir / "sync_map.json"
         sync_map_path.write_text(
@@ -767,6 +788,30 @@ class AlignmentPipeline:
 
 
 # ── module-level entry point ────────────────────────────────────────────────────
+
+
+async def recover_orphaned_jobs(
+    session_factory: async_sessionmaker | None = None,  # type: ignore[type-arg]
+) -> int:
+    """Mark any active-status jobs as failed at startup.
+
+    No alignment task can survive a process restart (asyncio tasks die with the
+    interpreter), so any job still in an active status must be an orphan.
+    Returns the number of jobs marked failed.
+    """
+    factory = session_factory if session_factory is not None else AsyncSessionLocal
+    async with factory() as session:
+        result = await session.execute(
+            select(AlignmentJob).where(AlignmentJob.status.in_(ACTIVE_STATUSES))
+        )
+        orphans = list(result.scalars().all())
+        for job in orphans:
+            job.status = "failed"
+            job.error_message = "Interrupted by server restart"
+        if orphans:
+            await session.commit()
+            logger.warning("Marked %d orphaned alignment jobs as failed", len(orphans))
+        return len(orphans)
 
 
 async def run_alignment_job(

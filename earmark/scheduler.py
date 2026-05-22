@@ -54,6 +54,23 @@ def _audio_to_kosync(
 
 _DOCFRAG_RE = re.compile(r"/body/DocFragment\[(\d+)\]")
 _BRACKET_IDX_RE = re.compile(r"\[(\d+)\]")
+_TEXT_NODE_TAIL_RE = re.compile(r"/text\(\)(?:\[\d+\])?(?:\.\d+)?$")
+_CHAR_OFFSET_TAIL_RE = re.compile(r"\.\d+$")
+_INDEX_ONE_RE = re.compile(r"\[1\]")
+
+
+def _normalize_xpath(xpath: str) -> str:
+    """Bring a KOReader xpath and a sync_map ebook_pos into a comparable form.
+
+    Strips: trailing /text() node selector (with optional [N] and .N),
+    trailing .N char offset, and all [1] sibling indices (CRE omits the
+    index when an element has no same-tag siblings; the sync map always
+    emits one).
+    """
+    xpath = _TEXT_NODE_TAIL_RE.sub("", xpath)
+    xpath = _CHAR_OFFSET_TAIL_RE.sub("", xpath)
+    xpath = _INDEX_ONE_RE.sub("", xpath)
+    return xpath
 
 
 def _kosync_to_audio(
@@ -68,12 +85,11 @@ def _kosync_to_audio(
     if not candidates:
         return None
 
-    # Strip KOReader's character-offset suffix (e.g. "div.42" → "div").
-    clean_xpath = re.sub(r"\.\d+$", "", xpath)
+    clean_xpath = _normalize_xpath(xpath)
 
     # Try exact match first (works when both sides use hierarchical XPaths).
     for entry in candidates:
-        if entry["ebook_pos"] == clean_xpath:
+        if _normalize_xpath(entry["ebook_pos"]) == clean_xpath:
             return float(entry["audio_start"])
 
     # Fallback: compare deepest bracketed index in the path after DocFragment[n].

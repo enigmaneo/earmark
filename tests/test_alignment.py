@@ -10,7 +10,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from bs4 import BeautifulSoup
 
-from earmark.services.alignment import _element_full_xpath, run_alignment_job
+from earmark.models import AlignmentJob
+from earmark.services.alignment import (
+    _element_full_xpath,
+    recover_orphaned_jobs,
+    run_alignment_job,
+)
+from sqlalchemy import select
 
 
 # ── _element_full_xpath ────────────────────────────────────────────────────────
@@ -106,9 +112,15 @@ async def _run_pipeline(
     session_factory: async_sessionmaker,  # type: ignore[type-arg]
     cache_dir: Path,
     abs_metadata_override: dict[str, Any] | None = None,
+    paragraphs_override: list[str] | None = None,
+    index_override: dict[str, dict[str, str]] | None = None,
+    fragments_override: list[dict[str, str]] | None = None,
 ) -> None:
     """Run the full pipeline with all blocking calls mocked."""
     metadata = abs_metadata_override if abs_metadata_override is not None else ABS_METADATA
+    paragraphs = paragraphs_override if paragraphs_override is not None else FAKE_PARAGRAPHS
+    index = index_override if index_override is not None else FAKE_INDEX
+    fragments = fragments_override if fragments_override is not None else FAKE_FRAGMENTS
 
     async def fake_get_item(self: Any, item_id: str) -> dict[str, Any]:
         return metadata
@@ -122,7 +134,7 @@ async def _run_pipeline(
         dest.write_bytes(b"fake_epub")
 
     def fake_parse_epub(epub_path: Path) -> tuple[list[str], dict[str, dict[str, str]], int]:
-        return FAKE_PARAGRAPHS, FAKE_INDEX, 1
+        return paragraphs, index, 1
 
     def fake_ffmpeg_concat(audio_files: list[Path], output_path: Path) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,7 +150,7 @@ async def _run_pipeline(
         audio_path: Path,
         paragraphs: list[str],
     ) -> list[dict[str, str]]:
-        return FAKE_FRAGMENTS
+        return fragments
 
     with (
         patch(
@@ -320,3 +332,117 @@ async def test_pipeline_fails_on_abs_error(
     data = resp.json()
     assert data["status"] == "failed"
     assert data["error_message"] is not None
+
+
+async def test_pipeline_assigns_fragments_in_seq_order_with_1000plus_paragraphs(
+    client: AsyncClient,
+    jwt_headers: dict[str, str],
+    db_session_factory: async_sessionmaker,  # type: ignore[type-arg]
+    tmp_path: Path,
+) -> None:
+    """Books with ≥1000 paragraphs must not use lexicographic id sort (para_1000 < para_101)."""
+    n = 1100
+    paragraphs = [f"Paragraph {i}." for i in range(n)]
+    index = {
+        f"para_{i:03d}": {
+            "text": f"Paragraph {i}.",
+            "ebook_pos": f"/body/DocFragment[1]/body/section[1]/p[{i + 1}]",
+        }
+        for i in range(n)
+    }
+    # fragment i covers seconds i..i+1 — distinct per paragraph
+    fragments = [{"begin": f"{i}.0", "end": f"{i + 1}.0"} for i in range(n)]
+
+    resp = await client.post(
+        "/alignment/jobs", json={"abs_item_id": ABS_ITEM_ID}, headers=jwt_headers
+    )
+    job_id = resp.json()["id"]
+
+    await _run_pipeline(
+        job_id,
+        db_session_factory,
+        tmp_path,
+        paragraphs_override=paragraphs,
+        index_override=index,
+        fragments_override=fragments,
+    )
+
+    resp = await client.get(f"/alignment/jobs/{job_id}/sync-map", headers=jwt_headers)
+    entries = resp.json()
+    assert len(entries) == n
+
+    # fragment[i]'s timestamp must land on para_{i:03d}, not on the lex-i-th id.
+    # 10.0 is the chapter[1].start offset from ABS_METADATA.
+    for i, entry in enumerate(entries):
+        assert entry["id"] == f"para_{i:03d}", f"position {i}: got {entry['id']}"
+        assert entry["audio_start"] == pytest.approx(i + 10.0)
+        assert entry["audio_end"] == pytest.approx(i + 1 + 10.0)
+
+
+async def test_pipeline_drops_degenerate_fragments(
+    client: AsyncClient,
+    jwt_headers: dict[str, str],
+    db_session_factory: async_sessionmaker,  # type: ignore[type-arg]
+    tmp_path: Path,
+) -> None:
+    """Fragments aeneas couldn't align (begin == end) must be dropped from the sync map."""
+    paragraphs = ["First.", "Second.", "Third (back matter)."]
+    index = {
+        "para_000": {"text": "First.", "ebook_pos": "/body/DocFragment[1]/body/section[1]/p[1]"},
+        "para_001": {"text": "Second.", "ebook_pos": "/body/DocFragment[1]/body/section[1]/p[2]"},
+        "para_002": {
+            "text": "Third (back matter).",
+            "ebook_pos": "/body/DocFragment[2]/body/section[1]/p[1]",
+        },
+    }
+    fragments = [
+        {"begin": "0.000", "end": "3.500"},
+        {"begin": "3.500", "end": "7.200"},
+        {"begin": "90.000", "end": "90.000"},  # aeneas placed at audio end — unaligned
+    ]
+
+    resp = await client.post(
+        "/alignment/jobs", json={"abs_item_id": ABS_ITEM_ID}, headers=jwt_headers
+    )
+    job_id = resp.json()["id"]
+
+    await _run_pipeline(
+        job_id,
+        db_session_factory,
+        tmp_path,
+        paragraphs_override=paragraphs,
+        index_override=index,
+        fragments_override=fragments,
+    )
+
+    resp = await client.get(f"/alignment/jobs/{job_id}/sync-map", headers=jwt_headers)
+    entries = resp.json()
+    assert len(entries) == 2
+    assert [e["id"] for e in entries] == ["para_000", "para_001"]
+    assert all(e["audio_start"] != e["audio_end"] for e in entries)
+
+
+async def test_recover_orphaned_jobs_marks_active_as_failed(
+    db_session_factory: async_sessionmaker,  # type: ignore[type-arg]
+) -> None:
+    async with db_session_factory() as session:
+        for status in ("pending", "fetching_audio", "aligning"):
+            session.add(AlignmentJob(
+                abs_item_id="li_orphan", status=status, progress=5,
+            ))
+        session.add(AlignmentJob(
+            abs_item_id="li_done", status="complete", progress=100,
+        ))
+        await session.commit()
+
+    n = await recover_orphaned_jobs(session_factory=db_session_factory)
+    assert n == 3
+
+    async with db_session_factory() as session:
+        result = await session.execute(select(AlignmentJob))
+        jobs = list(result.scalars().all())
+        statuses = sorted(j.status for j in jobs)
+        assert statuses == ["complete", "failed", "failed", "failed"]
+        for j in jobs:
+            if j.status == "failed":
+                assert j.error_message == "Interrupted by server restart"
