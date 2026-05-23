@@ -14,6 +14,7 @@ from earmark.models import AbsEbookMapping, AbsLibraryItem, AlignmentJob, EbookM
 from earmark.schemas import AbsItemSummary, EbookFileSummary, MappingCreate, MappingRead
 from earmark.utils import partial_md5
 from earmark.services.alignment import ACTIVE_STATUSES, run_alignment_job
+from earmark.services.progress import backfill_progress_titles
 from earmark.services.audiobookshelf import AudiobookshelfClient
 
 logger = logging.getLogger(__name__)
@@ -303,6 +304,20 @@ async def create_mapping(
     session.add(mapping)
     await session.commit()
     await session.refresh(mapping)
+
+    if kosync_document is not None:
+        kosync_user_result = await session.execute(
+            select(KosyncUser).where(KosyncUser.user_id == user.id)
+        )
+        for kosync_user in kosync_user_result.scalars().all():
+            await backfill_progress_titles(
+                session,
+                kosync_user_id=kosync_user.id,
+                document=kosync_document,
+                title=body.abs_title,
+            )
+        await session.commit()
+
     return _mapping_to_schema(mapping, None)
 
 

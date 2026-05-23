@@ -19,6 +19,7 @@
 
 	const columns: { key: SortBy | null; label: string }[] = [
 		{ key: 'title', label: 'Title' },
+		{ key: null, label: 'Document' },
 		{ key: 'percentage', label: 'Percentage' },
 		{ key: 'progress', label: 'Progress' },
 		{ key: 'device', label: 'Device' },
@@ -110,7 +111,8 @@
 			<tbody>
 				{#each items as item (item.id)}
 					<tr>
-						<td class="max-w-xs truncate">{item.title ?? item.document}</td>
+						<td class="max-w-xs truncate">{item.title}</td>
+						<td class="max-w-xs truncate font-mono text-xs text-surface-500">{item.document}</td>
 						<td>{formatPercent(item.percentage)}</td>
 						<td class="max-w-xs truncate font-mono text-xs">{item.progress}</td>
 						<td>{item.device}</td>
@@ -127,7 +129,7 @@
 					</tr>
 				{:else}
 					<tr>
-						<td colspan="7" class="text-center text-surface-500">No progress entries.</td>
+						<td colspan="8" class="text-center text-surface-500">No progress entries.</td>
 					</tr>
 				{/each}
 			</tbody>
@@ -161,13 +163,11 @@
 					method="POST"
 					action="?/deleteRecord"
 					use:enhance={() => {
-						return async ({ result, update }) => {
+						return async ({ result, update, invalidateAll }) => {
 							if (result.type === 'success' && result.data?.deleted) {
-								const deletedId = result.data.deleted as number;
-								items = items.filter((i) => i.id !== deletedId);
-								total -= 1;
 								pendingDelete = null;
 								deleteError = null;
+								await invalidateAll();
 							} else {
 								deleteError = 'Failed to delete. Please try again.';
 								await update();
