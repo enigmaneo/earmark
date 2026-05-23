@@ -120,32 +120,39 @@ currentTime = 145.0, duration = 3600.0
 
 **Input:** KOSync XPath string from KOReader (e.g. `/body/DocFragment[15]/body/section[1]/div[3].41`)
 
-KOReader's CRE engine records positions in the same hierarchical XPath format as the sync map, but appends a **character offset** (`.N`) to the deepest element — this is the byte offset within that element's text content. For example:
+KOReader's CRE engine records positions in a hierarchical XPath that differs from the sync map format in two ways:
 
-```
-/body/DocFragment[11]/body/section[1]/div.0
-```
+1. **Trailing `/text()` node selector** with optional `[N]` sibling index and `.N` character offset — points at a character inside a text node. The sync map only records the block element.
+   ```
+   /body/DocFragment[11]/body/section[1]/p[3]/text().42
+   ```
+2. **Omitted `[1]` sibling index** for single-sibling tags (CRE convention). The sync map always emits the index (1-based among same-tag siblings).
+   ```
+   KOReader  : /body/DocFragment[19]/body/section/p[11]
+   sync map  : /body/DocFragment[19]/body/section[1]/p[11]
+   ```
 
-The `.0` means "character offset 0 within this div" (i.e., the beginning of the element). earmark strips this suffix before matching.
+earmark normalizes both paths before comparison: strip `/text()(\[N\])?(\.N)?` and `.N` from the tail, and strip all `[1]` indices anywhere in the path. Non-`[1]` indices survive unchanged.
 
 **Algorithm:**
 
-1. Parse the DocFragment index `N` from the XPath using `/body/DocFragment[(\d+)]/`.
-2. Strip any trailing character-offset suffix (`.N`) from the XPath.
-3. Collect all sync map entries whose `ebook_pos` contains `DocFragment[N]`.
-4. Try an exact string match against the cleaned XPath. If found, return that entry's `audio_start`.
-5. Fallback: extract the deepest bracketed index from the path segment after `DocFragment[N]`. Find the sync map entry within `DocFragment[N]` whose deepest index is closest.
-6. Return `audio_start` of the best match.
+1. Parse the DocFragment index `N` from the XPath using `/body/DocFragment\[(\d+)\]/`.
+2. Collect all sync map entries whose `ebook_pos` contains `DocFragment[N]`.
+3. Normalize the input XPath and each candidate's `ebook_pos` (rules above). Try exact match — if found, return that entry's `audio_start`.
+4. Fallback: extract the deepest bracketed index from the path segment after `DocFragment[N]`. Find the sync map entry within `DocFragment[N]` whose deepest index is closest.
+5. Return `audio_start` of the best match.
 
-If step 3 produces no entries (DocFragment not found in sync map), log WARN and return `None` to skip the update.
+If step 2 produces no entries (DocFragment not found in sync map), log WARN and return `None` to skip the update.
 
 **Example:**
 
 ```
-XPath = "/body/DocFragment[3]/body/section[1]/div[2]/p[1].41"
-→ N = 3
-→ strip suffix → "/body/DocFragment[3]/body/section[1]/div[2]/p[1]"
-→ exact match found in sync map → return para_001.audio_start = 142.3
+XPath        = "/body/DocFragment[19]/body/section/p[11]/text().0"
+→ N          = 19
+→ normalize  → "/body/DocFragment[19]/body/section/p[11]"
+sync_map[k]  = "/body/DocFragment[19]/body/section[1]/p[11]"
+→ normalize  → "/body/DocFragment[19]/body/section/p[11]"
+→ exact match → return that entry's audio_start
 ```
 
 **Note on DocFragment numbering:** `ebook_pos` values in the sync map use the 1-based index of each item in the EPUB spine (all items, including non-XHTML), matching KOReader's crengine DocFragment numbering. Large logical chapters are sometimes split across multiple spine HTML files by publishers, so a single logical chapter may span several DocFragment indices.

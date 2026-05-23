@@ -483,9 +483,11 @@ Before calling aeneas, write the extracted text to a plain text file — one par
 
 ```python
 with open(paragraphs_path, "w", encoding="utf-8") as f:
-    for para_id in sorted(index.keys()):   # para_001, para_002, ...
+    for para_id in index:   # insertion order = seq order (para_000, para_001, ...)
         f.write(index[para_id]["text"] + "\n")
 ```
+
+**Do not sort `index.keys()` lexicographically.** For books with ≥1000 paragraphs the IDs cross the 3-digit/4-digit boundary, and `sorted()` puts `"para_1000"` between `"para_100"` and `"para_101"`, scrambling the fragment→id mapping. Python dicts preserve insertion order since 3.7, so iterating `index` directly gives the correct seq order.
 
 Blank lines must be excluded: aeneas treats every line — including blank ones — as a text fragment to align. A blank line would produce a spurious fragment that shifts all subsequent ID mappings by one.
 
@@ -581,10 +583,11 @@ with open(raw_output_path) as f:
     aeneas_output = json.load(f)
 
 fragments = aeneas_output["fragments"]
+para_ids = list(index.keys())  # seq order — see §11
 sync_map = []
 
 for i, fragment in enumerate(fragments):
-    para_id = f"para_{i + 1:03d}"
+    para_id = para_ids[i]
     entry = index[para_id]
 
     sync_map.append({
@@ -594,6 +597,10 @@ for i, fragment in enumerate(fragments):
         "ebook_pos": entry["ebook_pos"],
         "text_snippet": entry["text"],
     })
+
+# Drop fragments aeneas couldn't align (begin == end, parked at audio duration).
+# Typical cause: EPUB back matter (acknowledgments, copyright) not in the audiobook.
+sync_map = [e for e in sync_map if e["audio_start"] != e["audio_end"]]
 
 with open(sync_map_path, "w", encoding="utf-8") as f:
     json.dump(sync_map, f, indent=2, ensure_ascii=False)

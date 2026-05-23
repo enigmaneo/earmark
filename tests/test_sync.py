@@ -158,6 +158,31 @@ def test_kosync_to_audio_koreader_fallback_different_tag() -> None:
     assert result == pytest.approx(0.0)
 
 
+def test_kosync_to_audio_strips_text_node_and_char_offset() -> None:
+    # KOReader appends /text().N to point at a character inside a text node;
+    # the sync map only records the block element.
+    xpath = "/body/DocFragment[2]/body/section[1]/p[1]/text().0"
+    assert _kosync_to_audio(xpath, SYNC_MAP) == pytest.approx(100.0)
+
+
+def test_kosync_to_audio_matches_when_koreader_omits_index_one() -> None:
+    # CRE omits [1] for single-sibling tags; the sync map always emits it.
+    xpath = "/body/DocFragment[2]/body/section/p[1]"
+    assert _kosync_to_audio(xpath, SYNC_MAP) == pytest.approx(100.0)
+
+
+def test_kosync_to_audio_strips_text_and_omitted_index_one() -> None:
+    # Both gaps at once (the reported real-world case).
+    xpath = "/body/DocFragment[2]/body/section/p[1]/text().0"
+    assert _kosync_to_audio(xpath, SYNC_MAP) == pytest.approx(100.0)
+
+
+def test_kosync_to_audio_keeps_non_one_indices() -> None:
+    # Normalization must not strip indices other than [1].
+    xpath = "/body/DocFragment[3]/body/section/p[4]/text().5"
+    assert _kosync_to_audio(xpath, SYNC_MAP) == pytest.approx(300.0)
+
+
 def test_kosync_to_audio_missing_docfragment_returns_none() -> None:
     xpath = "/body/DocFragment[99]/body/p[1]"
     result = _kosync_to_audio(xpath, SYNC_MAP)

@@ -13,7 +13,7 @@ from earmark.earmark_auth import get_current_earmark_user
 from earmark.models import AbsEbookMapping, AbsLibraryItem, AlignmentJob, EbookMetadataCache, KosyncUser, ReadingProgress, User
 from earmark.schemas import AbsItemSummary, EbookFileSummary, MappingCreate, MappingRead
 from earmark.utils import partial_md5
-from earmark.services.alignment import run_alignment_job
+from earmark.services.alignment import ACTIVE_STATUSES, run_alignment_job
 from earmark.services.audiobookshelf import AudiobookshelfClient
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/web", tags=["mappings"])
 
 _EBOOK_EXTENSIONS = {".epub", ".pdf", ".mobi", ".azw3"}
-_ACTIVE_STATUSES = {"pending", "fetching_audio", "fetching_ebook", "parsing_epub", "aligning", "assembling"}
 
 
 def _check_cache_intact(abs_item_id: str, lib_item: AbsLibraryItem | None) -> bool | None:
@@ -346,7 +345,7 @@ async def sync_mapping(
         raise HTTPException(status_code=404, detail="Mapping not found")
 
     any_active = await session.execute(
-        select(AlignmentJob).where(AlignmentJob.status.in_(_ACTIVE_STATUSES)).limit(1)
+        select(AlignmentJob).where(AlignmentJob.status.in_(ACTIVE_STATUSES)).limit(1)
     )
     if any_active.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Another sync is already running")

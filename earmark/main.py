@@ -10,6 +10,7 @@ from earmark.database import init_db
 from earmark.routers import alignment, auth, mappings, progress, users
 from earmark.routers.progress import web_router
 from earmark.scheduler import start_scheduler, stop_scheduler
+from earmark.services.alignment import recover_orphaned_jobs
 
 
 def _configure_logging() -> None:
@@ -32,6 +33,7 @@ _configure_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_db()
+    await recover_orphaned_jobs()
     start_scheduler()
     yield
     stop_scheduler()
