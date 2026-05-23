@@ -1,11 +1,32 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from earmark.config import settings
-from earmark.models import ReadingProgress
+from earmark.models import AbsEbookMapping, ReadingProgress
+
+
+async def resolve_title_from_mapping(session: AsyncSession, document: str) -> str | None:
+    result = await session.execute(
+        select(AbsEbookMapping).where(AbsEbookMapping.kosync_document == document)
+    )
+    mapping = result.scalar_one_or_none()
+    return mapping.abs_title if mapping is not None else None
+
+
+async def backfill_progress_titles(
+    session: AsyncSession, *, kosync_user_id: int, document: str, title: str
+) -> None:
+    await session.execute(
+        update(ReadingProgress)
+        .where(
+            ReadingProgress.kosync_user_id == kosync_user_id,
+            ReadingProgress.document == document,
+        )
+        .values(title=title)
+    )
 
 
 async def write_reading_progress(
@@ -21,6 +42,9 @@ async def write_reading_progress(
     authors: str | None = None,
     filename: str | None = None,
 ) -> ReadingProgress:
+    mapped_title = await resolve_title_from_mapping(session, document)
+    resolved_title = mapped_title or title or document
+
     await session.execute(
         update(ReadingProgress)
         .where(
@@ -30,6 +54,17 @@ async def write_reading_progress(
         )
         .values(is_latest=False)
     )
+
+    if mapped_title is not None:
+        await session.execute(
+            update(ReadingProgress)
+            .where(
+                ReadingProgress.kosync_user_id == kosync_user_id,
+                ReadingProgress.document == document,
+            )
+            .values(title=resolved_title)
+        )
+
     record = ReadingProgress(
         kosync_user_id=kosync_user_id,
         document=document,
@@ -37,7 +72,7 @@ async def write_reading_progress(
         percentage=percentage,
         device=device,
         device_id=device_id,
-        title=title,
+        title=resolved_title,
         authors=authors,
         filename=filename,
         is_latest=True,

@@ -235,6 +235,27 @@ async def web_delete_record(
     record = result.scalar_one_or_none()
     if record is None:
         raise HTTPException(status_code=404, detail="Not found")
+
+    was_latest = record.is_latest
+    kosync_user_id = record.kosync_user_id
+    document = record.document
+
     await session.delete(record)
+    await session.flush()
+
+    if was_latest:
+        next_result = await session.execute(
+            select(ReadingProgress)
+            .where(
+                ReadingProgress.kosync_user_id == kosync_user_id,
+                ReadingProgress.document == document,
+            )
+            .order_by(ReadingProgress.updated_at.desc(), ReadingProgress.id.desc())
+            .limit(1)
+        )
+        next_record = next_result.scalar_one_or_none()
+        if next_record is not None:
+            next_record.is_latest = True
+
     await session.commit()
     return {"deleted": record_id}
