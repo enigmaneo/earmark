@@ -6,7 +6,7 @@
       "type": "debugpy",
       "request": "launch",
       "module": "uvicorn",
-      "args": ["earmark.main:app", "--reload"],
+      "args": ["earmark.main:app", "--reload", "--reload-dir", "src/earmark"],
       "jinja": true,
       "justMyCode": true,
       "env": {
@@ -19,7 +19,7 @@
       "request": "launch",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev:debug"],
-      "cwd": "${workspaceFolder}/frontend",
+      "cwd": "${workspaceFolder}/src/frontend",
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen",
       "skipFiles": ["<node_internals>/**"],

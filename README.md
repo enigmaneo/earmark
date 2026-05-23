@@ -35,7 +35,7 @@ Requires Python 3.12+ and [uv](https://github.com/astral-sh/uv).
 ```bash
 uv sync
 uv run earmark-seed                  # create and seed the local database
-uv run fastapi dev earmark/main.py   # dev server on :8000
+uv run fastapi dev src/earmark/main.py --reload-dir src/earmark   # dev server on :8000
 ```
 
 The seed command creates two users and five reading progress records for local development:
@@ -50,7 +50,7 @@ Running `earmark-seed` more than once is safe — it skips records that already 
 ### 3. Frontend
 
 ```bash
-cd frontend
+cd src/frontend
 npm install
 npm run dev   # dev server on :5173 (proxies /api -> :8000)
 ```
@@ -61,9 +61,9 @@ npm run dev   # dev server on :5173 (proxies /api -> :8000)
 uv run pytest          # tests
 uv run ruff check .    # lint
 uv run ruff format .   # format
-uv run mypy earmark    # type check
+uv run mypy src/earmark    # type check
 
-cd frontend
+cd src/frontend
 npm run check          # svelte-check + tsc
 npm run build
 ```
