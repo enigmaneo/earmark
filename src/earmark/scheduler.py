@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
@@ -128,6 +129,7 @@ async def _write_abs_to_kosync(
             mapping.abs_item_id, new_pct, min_percentage,
         )
         return
+    abs_updated_at = datetime.fromtimestamp(abs_data["lastUpdate"] / 1000, tz=UTC).astimezone(ZoneInfo(settings.timezone))
     mapping.last_synced_at = datetime.now(UTC)
     for ku in mapping.user.kosync_users:
         await write_reading_progress(
@@ -141,6 +143,7 @@ async def _write_abs_to_kosync(
             title=mapping.abs_title,
             authors=mapping.abs_author,
             filename=mapping.ebook_filename,
+            updated_at=abs_updated_at,
         )
     logger.info("ABS→KOSync %s: %.4f%%", mapping.abs_item_id, new_pct)
 

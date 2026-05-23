@@ -41,6 +41,7 @@ async def write_reading_progress(
     title: str | None = None,
     authors: str | None = None,
     filename: str | None = None,
+    updated_at: datetime | None = None,
 ) -> ReadingProgress:
     mapped_title = await resolve_title_from_mapping(session, document)
     resolved_title = mapped_title or title or document
@@ -76,7 +77,7 @@ async def write_reading_progress(
         authors=authors,
         filename=filename,
         is_latest=True,
-        updated_at=datetime.now(ZoneInfo(settings.timezone)),
+        updated_at=updated_at or datetime.now(ZoneInfo(settings.timezone)),
     )
     session.add(record)
     await session.commit()
