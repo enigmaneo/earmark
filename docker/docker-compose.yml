@@ -19,9 +19,9 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
       target: frontend
+    env_file: ../.env
     environment:
       BACKEND_URL: http://backend:7700
-      SECRET_KEY: ${SECRET_KEY}
       ORIGIN: ${ORIGIN:-http://localhost:7070}
     depends_on:
       - backend
