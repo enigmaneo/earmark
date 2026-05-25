@@ -1,6 +1,7 @@
+import json
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 
 class UserCreate(BaseModel):
@@ -93,6 +94,22 @@ class AlignmentJobRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+    warnings: list[str] = []
+
+    @field_validator("warnings", mode="before")
+    @classmethod
+    def _decode_warnings(cls, v: object) -> list[str]:
+        if v is None or v == "":
+            return []
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            try:
+                decoded = json.loads(v)
+                return decoded if isinstance(decoded, list) else []
+            except json.JSONDecodeError:
+                return []
+        return []
 
     model_config = ConfigDict(from_attributes=True)
 

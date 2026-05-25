@@ -94,6 +94,7 @@ class AlignmentJob(Base):
         DateTime, server_default=func.now(), onupdate=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    warnings: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     library_item: Mapped["AbsLibraryItem"] = relationship(back_populates="alignment_jobs")
 

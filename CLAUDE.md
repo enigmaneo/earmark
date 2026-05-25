@@ -39,8 +39,10 @@ Project documentation lives in `docs/`:
 ### Backend (Python)
 
 ```bash
-uv sync                        # install deps (or: pip install -e ".[dev]")
-bash scripts/install_aeneas.sh # one-time: install aeneas + espeak (alignment pipeline only)
+uv python install 3.13         # Python 3.12 or 3.13 (pyproject.toml pins <3.14)
+uv venv --python 3.13          # only if your default uv venv was created on a newer Python
+uv sync                        # core deps only
+uv sync --extra align          # core deps + WhisperX + torch (~2 GB) — use this for alignment jobs
 uv run fastapi dev src/earmark/main.py --reload-dir src/earmark   # dev server on :8000
 uv run pytest                  # tests
 uv run ruff check .            # lint
@@ -48,7 +50,7 @@ uv run ruff format .           # format
 uv run mypy src/earmark        # type check
 ```
 
-> **Note:** `install_aeneas.sh` is only needed if you use the forced-alignment pipeline. It patches `aeneas 1.7.3.0` for numpy 2.x / Python 3.12+ compatibility and installs `espeak`. See [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) for the full testing guide.
+> **Note:** `pyproject.toml` pins `requires-python = ">=3.12,<3.14"` because WhisperX/PyTorch lack 3.14 wheels. The `align` extra is only needed when running alignment jobs — the KOSync server, scheduler, and web UI run on core deps alone. Configure model/device via `WHISPER_MODEL`, `WHISPER_DEVICE`, `WHISPER_COMPUTE_TYPE` env vars (defaults: `tiny.en`, `cpu`, `int8`). See [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) for the full testing guide.
 
 ### Frontend (SvelteKit)
 

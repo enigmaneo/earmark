@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     cwa_password: str = ""
     ebook_local_root: str = "."
     alignment_cache_dir: str = ".cache/earmark"
+    whisper_model: str = "tiny.en"  # tiny.en | base.en | small.en | medium.en | large-v3
+    whisper_device: str = "cpu"  # cpu | cuda | mps
+    whisper_compute_type: str = "int8"  # int8 | float16 | float32
+    whisper_batch_size: int = 16
+    whisper_language: str = "en"
 
     timezone: str = "America/New_York"
 

@@ -19,3 +19,11 @@ async def get_session() -> AsyncSession:  # type: ignore[return]
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Stopgap migration for additive columns (no alembic wired up yet).
+        for stmt in (
+            "ALTER TABLE alignment_jobs ADD COLUMN warnings TEXT",
+        ):
+            try:
+                await conn.exec_driver_sql(stmt)
+            except Exception:
+                pass  # column already exists

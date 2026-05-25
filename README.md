@@ -30,13 +30,18 @@ SYNC_INTERVAL_SECONDS=300
 
 ### 2. Backend
 
-Requires Python 3.12+ and [uv](https://github.com/astral-sh/uv).
+Requires Python 3.12 or 3.13 (WhisperX pulls in PyTorch, which has no Python 3.14 wheels yet) and [uv](https://github.com/astral-sh/uv).
 
 ```bash
-uv sync
+uv python install 3.13               # if 3.13 isn't already installed
+uv venv --python 3.13                # only needed if your default uv venv is on a newer Python
+uv sync --extra align                # WhisperX + torch — required for alignment jobs
+                                     # (use plain `uv sync` if you only need progress sync)
 uv run earmark-seed                  # create and seed the local database
 uv run fastapi dev src/earmark/main.py --reload-dir src/earmark   # dev server on :8000
 ```
+
+The `[align]` extra is roughly 2 GB of model dependencies. Skip it if you only need progress sync (the KOSync server, scheduler, and web UI all work without it); alignment jobs will fail with `ModuleNotFoundError: No module named 'whisperx'` until it's installed.
 
 The seed command creates two users and five reading progress records for local development:
 

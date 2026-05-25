@@ -22,9 +22,10 @@ STAGE_LABELS = {
     "fetching_audio": "Fetching audio files from ABS",
     "fetching_ebook": "Fetching ebook",
     "parsing_epub": "Parsing EPUB and extracting paragraphs",
-    "aligning": "Running aeneas forced alignment",
+    "aligning": "Running WhisperX transcription + alignment",
     "assembling": "Assembling sync map",
     "complete": "Complete",
+    "complete_with_warnings": "Complete (with warnings)",
     "failed": "FAILED",
 }
 

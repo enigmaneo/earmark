@@ -1,13 +1,15 @@
 # syntax=docker/dockerfile:1
 
 ###############################################################################
-# Backend – dependency + aeneas builder
+# Backend – dependency builder (WhisperX alignment engine)
 ###############################################################################
-FROM python:3.12-alpine AS backend-builder
+# WhisperX requires Python ≤3.13 (PyTorch wheel matrix). The 'align' extra
+# pulls in torch + faster-whisper + the wav2vec2 alignment models on first use.
+FROM python:3.13-slim AS backend-builder
 
-RUN apk add --no-cache \
-    gcc musl-dev libffi-dev openssl-dev \
-    ffmpeg espeak espeak-dev curl
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc libffi-dev libssl-dev ffmpeg curl \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -16,20 +18,10 @@ RUN pip install --no-cache-dir uv
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-COPY scripts/ ./scripts/
-
 ENV PATH="/app/.venv/bin:$PATH"
 
-RUN uv pip install setuptools
-
-# Install aeneas 1.7.3.0 with patches for numpy 2.x / Python 3.12+
-RUN set -e && \
-    curl -sL "https://files.pythonhosted.org/packages/source/a/aeneas/aeneas-1.7.3.0.tar.gz" \
-        | tar xz -C /tmp && \
-    python scripts/patch_aeneas_setup.py /tmp/aeneas-1.7.3.0/setup.py && \
-    AENEAS_WITH_CEW=False uv pip install --no-build-isolation /tmp/aeneas-1.7.3.0 && \
-    WAVFILE=$(python -c "import aeneas.wavfile as m, inspect, pathlib; print(pathlib.Path(inspect.getfile(m)))") && \
-    python scripts/patch_aeneas_wavfile.py "$WAVFILE"
+# Install alignment extra (WhisperX + torch). Skip if you'll never run alignment.
+RUN uv pip install -e ".[align]"
 
 COPY src/earmark ./src/earmark
 RUN uv pip install --no-deps .
@@ -37,9 +29,10 @@ RUN uv pip install --no-deps .
 ###############################################################################
 # Backend – runtime image
 ###############################################################################
-FROM python:3.12-alpine AS backend
+FROM python:3.13-slim AS backend
 
-RUN apk add --no-cache ffmpeg espeak
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

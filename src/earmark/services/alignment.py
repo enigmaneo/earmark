@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-import multiprocessing
+import re
 import shutil
 import tempfile
 from datetime import UTC, datetime
@@ -23,40 +23,218 @@ logger = logging.getLogger(__name__)
 
 _BLOCK_TAGS: list[str] = ["p", "h1", "h2", "h3", "h4", "h5", "h6"]
 
-_FRONT_MATTER_TITLES: frozenset[str] = frozenset({
-    "cover", "title page", "dedication", "contents", "copyright",
-    "preface", "foreword", "acknowledgments", "about the author",
-    "half title", "halftitle",
-})
-
 ACTIVE_STATUSES: frozenset[str] = frozenset({
     "pending", "fetching_audio", "fetching_ebook",
     "parsing_epub", "aligning", "assembling",
 })
 
+# Substring phrases tested against the normalized TOC title.
+_FRONT_PHRASES: tuple[str, ...] = (
+    "cover", "title page", "half title", "halftitle", "half-title",
+    "dedication", "contents", "table of contents",
+    "copyright", "imprint", "colophon",
+    "preface", "foreword", "introduction",
+    "acknowledgments", "acknowledgements",
+    "epigraph", "maps",
+    "dramatis personae", "cast of characters", "characters",
+    "praise", "advance praise", "reviews",
+    "also by", "by the same author", "books by",
+    "front matter", "frontmatter",
+)
+_BACK_PHRASES: tuple[str, ...] = (
+    "about the author", "about the publisher",
+    "acknowledgments", "acknowledgements",
+    "advertisement", "newsletter",
+    "excerpt", "teaser", "sample chapter", "preview",
+    "notes", "endnotes", "appendix", "bibliography",
+    "glossary", "credits", "colophon",
+    "back matter", "backmatter",
+    "also by",
+)
+# Substring tokens tested against (file_name + " " + item_id).lower().replace("-","_")
+_FRONT_FILE_TOKENS: tuple[str, ...] = (
+    "cover", "title", "halftitle", "half_title",
+    "dedication", "contents", "toc",
+    "copyright", "imprint", "colophon",
+    "preface", "foreword", "introduction",
+    "epigraph", "map", "frontmatter",
+    "praise", "alsoby", "also_by",
+)
+_BACK_FILE_TOKENS: tuple[str, ...] = (
+    "about_the_author", "abouttheauthor",
+    "about_the_publisher", "aboutthepublisher",
+    "acknowledg", "advertisement", "newsletter",
+    "excerpt", "teaser", "sample", "preview",
+    "endnote", "appendix", "bibliography",
+    "glossary", "credits", "backmatter",
+)
+# Heading text that strongly identifies bodymatter
+_BODY_HEADING_RE = re.compile(
+    r"^\s*(prologue|epilogue|chapter\b|book\b|part\b|\d+\b|[ivxlcdm]+\.?\s+\S)",
+    re.IGNORECASE,
+)
+# Heading patterns suggesting body even without chapter wording
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
 
-def _find_first_chapter_spine_pos(book: object, spine_items: list[str]) -> int:
-    """Return 1-based spine position of the first non-front-matter TOC entry."""
-    def _scan(items: list) -> int | None:  # type: ignore[type-arg]
-        for item in items:
-            if isinstance(item, tuple):
-                _, children = item
-                result = _scan(children)
-                if result is not None:
-                    return result
-            elif hasattr(item, "href"):
-                if item.title.strip().lower() not in _FRONT_MATTER_TITLES:
-                    href_file = item.href.split("#")[0]
-                    for pos, item_id in enumerate(spine_items, start=1):
-                        spine_item = book.get_item_with_id(item_id)  # type: ignore[union-attr]
-                        if spine_item and (
-                            href_file.endswith(spine_item.file_name)
-                            or spine_item.file_name.endswith(href_file)
-                        ):
-                            return pos
-        return None
 
-    return _scan(book.toc) or 1  # type: ignore[union-attr]
+def _toc_title_map(book: object) -> dict[str, str]:
+    """Map spine file_name → TOC title (normalized lower)."""
+    out: dict[str, str] = {}
+
+    def walk(items: list) -> None:  # type: ignore[type-arg]
+        for it in items:
+            if isinstance(it, tuple):
+                head, kids = it
+                if hasattr(head, "href") and hasattr(head, "title"):
+                    href = head.href.split("#")[0]
+                    out.setdefault(href, _norm(head.title))
+                walk(kids)
+            elif hasattr(it, "href"):
+                href = it.href.split("#")[0]
+                out.setdefault(href, _norm(it.title))
+
+    walk(book.toc)  # type: ignore[union-attr]
+    return out
+
+
+def _landmarks_from_nav(book: object) -> dict[str, str]:
+    """Return {href → epub:type role} from the EPUB3 nav landmarks, if any."""
+    import ebooklib
+    from bs4 import BeautifulSoup
+
+    nav_items = list(book.get_items_of_type(ebooklib.ITEM_NAVIGATION))  # type: ignore[union-attr]
+    if not nav_items:
+        nav_items = [
+            it for it in book.get_items()  # type: ignore[union-attr]
+            if "nav" in (getattr(it, "properties", None) or [])
+        ]
+    out: dict[str, str] = {}
+    for nav in nav_items:
+        soup = BeautifulSoup(nav.get_content(), "html.parser")
+        for nav_el in soup.find_all("nav"):
+            ep_type = (nav_el.get("epub:type") or "").strip().lower()
+            if "landmarks" not in ep_type:
+                continue
+            for a in nav_el.find_all("a", href=True):
+                role = (a.get("epub:type") or "").strip().lower()
+                if role in ("frontmatter", "bodymatter", "backmatter"):
+                    href = a["href"].split("#")[0]
+                    out[href] = role
+    return out
+
+
+def _is_blurb_shaped(soup: object) -> bool:
+    """True when most content is blurbs/attribution (front-matter praise pages)."""
+    ps = [p.get_text(" ", strip=True) for p in soup.find_all("p")]  # type: ignore[union-attr]
+    ps = [p for p in ps if p]
+    if not ps:
+        return False
+    short_attr = sum(1 for p in ps if len(p) < 80 and re.match(r"^[—\-–]\s*[A-Z]", p))
+    if short_attr >= max(2, len(ps) // 3):
+        return True
+    bq_chars = sum(
+        len(bq.get_text(" ", strip=True))
+        for bq in soup.find_all(["blockquote", "cite"])  # type: ignore[union-attr]
+    )
+    total = sum(len(p) for p in ps)
+    return bool(total) and bq_chars / total >= 0.5
+
+
+def _is_substantive(soup: object) -> bool:
+    """At least 2 paragraphs of ≥40 chars — likely real narrative."""
+    ps = [p.get_text(" ", strip=True) for p in soup.find_all("p")]  # type: ignore[union-attr]
+    return sum(1 for p in ps if len(p) >= 40) >= 2
+
+
+def _heading_text(soup: object) -> str:
+    parts = [
+        h.get_text(" ", strip=True)
+        for h in soup.find_all(["h1", "h2", "h3"])  # type: ignore[union-attr]
+    ]
+    return " ".join(parts).strip()
+
+
+def _classify_spine_item(
+    book: object,
+    item_id: str,
+    attrs: dict,  # type: ignore[type-arg]
+    toc_titles: dict[str, str],
+    landmarks: dict[str, str],
+) -> str:
+    """Return one of {'front', 'back', 'body', 'ambiguous', 'skip'} for a spine entry."""
+    import ebooklib
+    from bs4 import BeautifulSoup
+
+    item = book.get_item_with_id(item_id)  # type: ignore[union-attr]
+    if item is None or item.get_type() != ebooklib.ITEM_DOCUMENT:
+        return "skip"
+
+    href = item.file_name
+    role = landmarks.get(href) or landmarks.get(href.split("/")[-1])
+    if role == "frontmatter":
+        return "front"
+    if role == "backmatter":
+        return "back"
+    if role == "bodymatter":
+        return "body"
+
+    linear = (attrs.get("linear") if isinstance(attrs, dict) else None) or "yes"
+    soup = BeautifulSoup(item.get_content(), "html.parser")
+    heading = _norm(_heading_text(soup))
+    toc_title = toc_titles.get(href, "")
+    fn_id = (href + " " + item_id).lower().replace("-", "_")
+
+    if heading and _BODY_HEADING_RE.match(heading):
+        return "body"
+    if linear == "no":
+        return "front"
+
+    blurb = _is_blurb_shaped(soup)
+    front_hit = (
+        any(p in toc_title for p in _FRONT_PHRASES)
+        or any(t in fn_id for t in _FRONT_FILE_TOKENS)
+        or blurb
+    )
+    back_hit = (
+        any(p in toc_title for p in _BACK_PHRASES)
+        or any(t in fn_id for t in _BACK_FILE_TOKENS)
+    )
+
+    if front_hit and back_hit:
+        return "ambiguous"
+    if front_hit:
+        return "front"
+    if back_hit:
+        return "back"
+    if not _is_substantive(soup):
+        return "ambiguous"
+    return "body"
+
+
+def _classify_spine(book: object) -> tuple[int, int, list[str]]:
+    """Walk the spine and return (first_body_pos, last_body_pos, classes).
+
+    Positions are 1-based, inclusive. classes[i] aligns with spine index i (0-based).
+    """
+    toc_titles = _toc_title_map(book)
+    landmarks = _landmarks_from_nav(book)
+    spine = book.spine  # type: ignore[union-attr]
+
+    classes: list[str] = []
+    for entry in spine:
+        if isinstance(entry, tuple):
+            iid, attrs = entry
+        else:
+            iid, attrs = entry, {}
+        if not isinstance(attrs, dict):
+            attrs = {"linear": attrs}
+        classes.append(_classify_spine_item(book, iid, attrs, toc_titles, landmarks))
+
+    body_positions = [i + 1 for i, c in enumerate(classes) if c == "body"]
+    first_body = body_positions[0] if body_positions else 1
+    last_body = body_positions[-1] if body_positions else len(classes)
+    return first_body, last_body, classes
 
 
 def _element_full_xpath(element: object) -> str:
@@ -81,22 +259,27 @@ def _element_full_xpath(element: object) -> str:
     return "/body/" + "/".join(parts)
 
 
-def _parse_epub_sync(epub_path: Path) -> tuple[list[str], dict[str, dict[str, str]], int]:
+def _parse_epub_sync(
+    epub_path: Path,
+) -> tuple[list[str], dict[str, dict[str, str]], int, int]:
     import ebooklib
     from bs4 import BeautifulSoup
     from ebooklib import epub
 
     book = epub.read_epub(str(epub_path))
-    spine_items = [item_id for item_id, _ in book.spine]
+    spine_items = [
+        (entry[0] if isinstance(entry, tuple) else entry)
+        for entry in book.spine
+    ]
+
+    first_body_pos, last_body_pos, _ = _classify_spine(book)
 
     paragraphs: list[str] = []
     index: dict[str, dict[str, str]] = {}
     seq = 0
 
-    first_chapter_spine_pos = _find_first_chapter_spine_pos(book, spine_items)
-
     for spine_pos, item_id in enumerate(spine_items, start=1):
-        if spine_pos < first_chapter_spine_pos:
+        if spine_pos < first_body_pos or spine_pos > last_body_pos:
             continue
         item = book.get_item_with_id(item_id)
         if item is None or item.get_type() != ebooklib.ITEM_DOCUMENT:
@@ -116,16 +299,7 @@ def _parse_epub_sync(epub_path: Path) -> tuple[list[str], dict[str, dict[str, st
             paragraphs.append(text)
             seq += 1
 
-    return paragraphs, index, first_chapter_spine_pos
-
-
-def _ffmpeg_trim_sync(input_path: Path, output_path: Path, start: float) -> None:
-    (
-        ffmpeg.input(str(input_path), ss=start)
-        .output(str(output_path), ar=16000, ac=1, acodec="pcm_s16le")
-        .overwrite_output()
-        .run(quiet=True)
-    )
+    return paragraphs, index, first_body_pos, last_body_pos
 
 
 def _ffmpeg_concat_sync(audio_files: list[Path], output_path: Path) -> None:
@@ -145,132 +319,187 @@ def _ffmpeg_concat_sync(audio_files: list[Path], output_path: Path) -> None:
         concat_list.unlink(missing_ok=True)
 
 
-def _run_aeneas_sync(
+def _transcribe_audio_sync(
     audio_path: Path,
-    paragraphs_path: Path,
-    raw_output_path: Path,
-    progress_q: "multiprocessing.Queue[int] | None" = None,
-) -> list[dict[str, str]]:
-    from aeneas.executetask import ExecuteTask
-    from aeneas.task import Task
+    model_name: str,
+    device: str,
+    compute_type: str,
+    batch_size: int,
+    language: str,
+) -> list[dict]:  # type: ignore[type-arg]
+    """Run WhisperX and return word-level timestamps as a flat list.
 
-    config_str = (
-        "task_language=eng"
-        "|is_text_type=plain"
-        "|os_task_file_format=json"
-        "|task_adjust_boundary_algorithm=rate"
-        "|task_adjust_boundary_rate_value=21"
-    )
-    task = Task(config_string=config_str)
-    task.audio_file_path_absolute = str(audio_path)
-    task.text_file_path_absolute = str(paragraphs_path)
-    task.sync_map_file_path_absolute = str(raw_output_path)
-
-    et = ExecuteTask(task)
-
-    if progress_q is not None:
-        _STEP_PROGRESS = {
-            "extract MFCC real wave": 30,
-            "compute head tail": 42,
-            "create sync map": 80,
-        }
-        _orig_step_begin = et._step_begin
-
-        def _patched_step_begin(label: str, log: bool = True) -> None:
-            if label in _STEP_PROGRESS:
-                progress_q.put(_STEP_PROGRESS[label])
-            _orig_step_begin(label, log)
-
-        et._step_begin = _patched_step_begin
-
-    et.execute()
-    task.output_sync_map_file()
-
-    with raw_output_path.open() as f:
-        data = json.load(f)
-    return data["fragments"]  # type: ignore[no-any-return]
-
-
-def _run_aeneas_in_process(
-    audio_path: Path,
-    paragraphs_path: Path,
-    raw_output_path: Path,
-    progress_q: "multiprocessing.Queue[int]",
-    result_q: "multiprocessing.SimpleQueue",
-) -> None:
-    """Module-level target for multiprocessing.Process — ForkingPickler can serialize this."""
-    try:
-        _run_aeneas_sync(audio_path, paragraphs_path, raw_output_path, progress_q)
-        result_q.put(None)  # success — fragments already on disk at raw_output_path
-    except Exception as exc:
-        result_q.put(exc)  # small exception object, safe for SimpleQueue
-
-
-def _rescale_to_chapters(
-    sync_map: list[dict],  # type: ignore[type-arg]
-    chapters: list[dict],  # type: ignore[type-arg]
-    first_chapter_spine_pos: int,
-) -> None:
-    """Linearly rescale aeneas timestamps within each EPUB chapter to match ABS chapter boundaries.
-
-    Assumes ABS chapters[1], chapters[2], ... correspond to EPUB
-    DocFragment[first_chapter_spine_pos],
-    DocFragment[first_chapter_spine_pos+1], etc. (one ABS chapter per spine item).
-    Entries whose spine position doesn't map to a valid chapter index are left unchanged.
+    Each entry: {"word": str, "start": float, "end": float} (absolute audio seconds).
     """
-    import re
+    import whisperx
 
-    if len(chapters) < 2:
-        return
+    model = whisperx.load_model(model_name, device, compute_type=compute_type, language=language)
+    audio = whisperx.load_audio(str(audio_path))
+    result = model.transcribe(audio, batch_size=batch_size, language=language)
 
-    logger.info(
-        "Chapter rescaling: %d ABS chapters, first_chapter_spine_pos=%d",
-        len(chapters),
-        first_chapter_spine_pos,
+    align_model, metadata = whisperx.load_align_model(language_code=language, device=device)
+    aligned = whisperx.align(
+        result["segments"], align_model, metadata, audio, device,
+        return_char_alignments=False,
     )
 
-    def _spine_pos(ebook_pos: str) -> int | None:
-        m = re.match(r"/body/DocFragment\[(\d+)\]/", ebook_pos)
-        return int(m.group(1)) if m else None
+    words: list[dict] = []  # type: ignore[type-arg]
+    for seg in aligned.get("segments", []):
+        for w in seg.get("words", []):
+            if "start" in w and "end" in w and w.get("word"):
+                words.append({
+                    "word": str(w["word"]).strip(),
+                    "start": float(w["start"]),
+                    "end": float(w["end"]),
+                })
+    return words
 
-    # Group sync_map entry indices by spine position
-    groups: dict[int, list[int]] = {}
-    for i, entry in enumerate(sync_map):
-        sp = _spine_pos(entry["ebook_pos"])
-        if sp is not None:
-            groups.setdefault(sp, []).append(i)
 
-    for spine_pos in sorted(groups.keys()):
-        indices = groups[spine_pos]
-        ch_idx = spine_pos - first_chapter_spine_pos + 1
-        if ch_idx < 1 or ch_idx >= len(chapters):
+def _normalize_text(s: str) -> str:
+    """Lowercase, strip non-alphanumeric to spaces, collapse whitespace."""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", s.lower())).strip()
+
+
+def _build_transcript_index(
+    words: list[dict],  # type: ignore[type-arg]
+) -> tuple[str, list[tuple[int, int, float, float]]]:
+    """Concatenate words into a normalized transcript and return char→time mapping.
+
+    Returns (transcript, ranges) where ranges[i] = (char_start, char_end, t_start, t_end).
+    """
+    parts: list[str] = []
+    ranges: list[tuple[int, int, float, float]] = []
+    pos = 0
+    for w in words:
+        text = _normalize_text(w["word"])
+        if not text:
+            continue
+        if parts:
+            pos += 1
+        start = pos
+        pos += len(text)
+        parts.append(text)
+        ranges.append((start, pos, float(w["start"]), float(w["end"])))
+    return " ".join(parts), ranges
+
+
+def _word_index_at_char(ranges: list[tuple[int, int, float, float]], char_pos: int) -> int:
+    """Binary search: index of the first word whose char-end is > char_pos."""
+    lo, hi = 0, len(ranges)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if ranges[mid][1] <= char_pos:
+            lo = mid + 1
+        else:
+            hi = mid
+    return min(lo, max(0, len(ranges) - 1))
+
+
+def _align_paragraphs_to_transcript(
+    paragraphs: list[str],
+    transcript: str,
+    ranges: list[tuple[int, int, float, float]],
+    min_score: float = 45.0,
+) -> list[tuple[float, float] | None]:
+    """For each paragraph, return its (audio_start, audio_end) via fuzzy match.
+
+    Each paragraph is searched in a window centered on its **proportional
+    expected position** (paragraph i out of n → char i/n through the
+    transcript). The window is wide enough to absorb non-uniform ratios of
+    EPUB paragraphs to spoken words across chapters.
+
+    Returns None for paragraphs that don't fuzzy-match (front/back matter not
+    narrated, ad inserts, etc.). Proportional positioning naturally produces
+    monotonically-increasing timestamps on average; small local regressions
+    can occur at chapter boundaries but are acceptable for sync.
+    """
+    from rapidfuzz import fuzz
+
+    n = len(paragraphs)
+    total = len(transcript)
+    if total == 0 or not ranges:
+        return [None] * n
+
+    results: list[tuple[float, float] | None] = []
+    for i, p in enumerate(paragraphs):
+        p_norm = _normalize_text(p)
+        if not p_norm:
+            results.append(None)
+            continue
+        expected = int(total * (i / n))
+        # Window centered on expected position. Wide enough to cover the
+        # entire chapter the paragraph likely belongs to.
+        half = max(8_000, len(p_norm) * 5)
+        win_start = max(0, expected - half)
+        win_end = min(total, expected + half)
+        if win_start >= total:
+            results.append(None)
             continue
 
-        abs_ch_start = float(chapters[ch_idx]["start"])
-        abs_ch_end = (
-            float(chapters[ch_idx + 1]["start"])
-            if ch_idx + 1 < len(chapters)
-            else sync_map[indices[-1]]["audio_end"]
-        )
-
-        aeneas_ch_start = sync_map[indices[0]]["audio_start"]
-        aeneas_ch_end = sync_map[indices[-1]]["audio_end"]
-        aeneas_duration = aeneas_ch_end - aeneas_ch_start
-        abs_duration = abs_ch_end - abs_ch_start
-
-        if aeneas_duration <= 0 or abs_duration <= 0:
+        window = transcript[win_start:win_end]
+        match = fuzz.partial_ratio_alignment(p_norm, window)
+        if match.score < min_score:
+            results.append(None)
             continue
 
-        scale = abs_duration / aeneas_duration
-        logger.debug(
-            "DocFragment[%d] → chapter %d: aeneas [%.2f, %.2f] → abs [%.2f, %.2f] (scale=%.3f)",
-            spine_pos, ch_idx, aeneas_ch_start, aeneas_ch_end, abs_ch_start, abs_ch_end, scale,
+        m_start = win_start + match.dest_start
+        m_end = win_start + match.dest_end
+
+        start_idx = _word_index_at_char(ranges, m_start)
+        end_idx = _word_index_at_char(ranges, max(m_end - 1, m_start))
+        end_idx = max(end_idx, start_idx)
+
+        t_start = ranges[start_idx][2]
+        t_end = ranges[end_idx][3]
+        if t_end < t_start:
+            t_end = t_start
+        results.append((t_start, t_end))
+
+    return results
+
+
+def _validate_sync_map(
+    sync_map: list[dict],  # type: ignore[type-arg]
+    scales: dict[int, float],
+    total_duration: float,
+    audio_offset: float,
+) -> list[str]:
+    """Return a list of human-readable warnings about a finished sync map."""
+    warnings: list[str] = []
+    if not sync_map:
+        return warnings
+
+    for spine_pos, scale in scales.items():
+        if scale < 0.5 or scale > 2.0:
+            warnings.append(
+                f"chapter_rescale_extreme: DocFragment[{spine_pos}] scale={scale:.2f}"
+            )
+
+    first_text = sync_map[0].get("text_snippet", "")
+    first_pos = sync_map[0].get("ebook_pos", "")
+    # Headings (h1/h2/h3) are legitimately short; only flag short snippets
+    # that land on paragraph/inline elements where front matter typically lives.
+    is_heading = bool(re.search(r"/h[1-6]\[\d+\]$", first_pos))
+    if (not is_heading and len(first_text) < 40) or re.match(r"^[—\-–]\s*[A-Z]", first_text):
+        warnings.append(f"suspect_first_entry: {first_text[:80]!r}")
+
+    if total_duration > 0 and audio_offset / total_duration > 0.05:
+        warnings.append(
+            f"audio_offset_excessive: {audio_offset:.0f}s / {total_duration:.0f}s"
         )
 
-        for i in indices:
-            e = sync_map[i]
-            e["audio_start"] = abs_ch_start + (e["audio_start"] - aeneas_ch_start) * scale
-            e["audio_end"] = abs_ch_start + (e["audio_end"] - aeneas_ch_start) * scale
+    spine_positions: list[int] = []
+    for entry in sync_map:
+        m = re.match(r"/body/DocFragment\[(\d+)\]/", entry["ebook_pos"])
+        if m:
+            spine_positions.append(int(m.group(1)))
+    if spine_positions:
+        present = set(spine_positions)
+        missing = sorted(set(range(min(present), max(present) + 1)) - present)
+        if len(missing) > 2:
+            warnings.append(f"docfragment_gap: missing {missing}")
+
+    return warnings
 
 
 # ── pipeline class ──────────────────────────────────────────────────────────────
@@ -289,16 +518,14 @@ class AlignmentPipeline:
             cache_dir.mkdir(parents=True, exist_ok=True)
 
             chapters = item_metadata.get("media", {}).get("chapters", [])
-            chapter_start = float(chapters[1]["start"]) if len(chapters) >= 2 else 0.0
 
             audio_dir = await self._download_audio_files(cache_dir, item_metadata)
             ebook_path = await self._download_ebook(cache_dir, item_metadata)
-            paragraphs, index, first_chapter_spine_pos = await self._parse_epub(ebook_path)
-            audio_path = await self._prepare_audio(audio_dir, chapter_start)
-            fragments = await self._run_aeneas(cache_dir, audio_path, paragraphs)
-            await self._assemble_sync_map(
-                cache_dir, fragments, index, chapter_start, chapters, first_chapter_spine_pos
-            )
+            _paragraphs, index, _first_body_pos, _last_body_pos = await self._parse_epub(ebook_path)
+
+            audio_path = await self._prepare_audio(audio_dir)
+            words = await self._transcribe(audio_path)
+            await self._assemble_sync_map(cache_dir, words, index, chapters)
         except Exception as exc:
             logger.exception("Alignment job %d failed", self.job.id)
             await self._fail(str(exc))
@@ -567,183 +794,120 @@ class AlignmentPipeline:
 
     async def _parse_epub(
         self, epub_path: Path
-    ) -> tuple[list[str], dict[str, dict[str, str]], int]:
+    ) -> tuple[list[str], dict[str, dict[str, str]], int, int]:
         await self._update_status("parsing_epub", progress=20)
-        paragraphs, index, first_chapter_spine_pos = await asyncio.to_thread(
+        paragraphs, index, first_body_pos, last_body_pos = await asyncio.to_thread(
             _parse_epub_sync, epub_path
         )
         await self._update_status("parsing_epub", progress=25, paragraph_count=len(paragraphs))
-        return paragraphs, index, first_chapter_spine_pos
+        return paragraphs, index, first_body_pos, last_body_pos
 
-    async def _prepare_audio(self, audio_dir: Path, trim_start: float = 0.0) -> Path:
+    async def _prepare_audio(self, audio_dir: Path) -> Path:
+        """Concatenate audio files into a single track for WhisperX."""
         audio_files = sorted(audio_dir.glob("*"))
         audio_files = [f for f in audio_files if f.is_file()]
         concat_path = audio_dir.parent / "concatenated.wav"
-        trimmed_path = audio_dir.parent / "trimmed.wav"
 
         if len(audio_files) == 1 and audio_files[0].suffix.lower() in (".mp3", ".m4b", ".m4a"):
-            src = audio_files[0]
-        else:
-            try:
-                await asyncio.to_thread(_ffmpeg_concat_sync, audio_files, concat_path)
-            except Exception as exc:
-                logger.warning("Strategy A (concat) failed: %s — falling back to per-file", exc)
-                raise
-            src = concat_path
+            return audio_files[0]
 
-        if trim_start > 0.0:
-            await asyncio.to_thread(_ffmpeg_trim_sync, src, trimmed_path, trim_start)
-            return trimmed_path
+        await asyncio.to_thread(_ffmpeg_concat_sync, audio_files, concat_path)
+        return concat_path
 
-        return src
+    async def _transcribe(self, audio_path: Path) -> list[dict]:  # type: ignore[type-arg]
+        """Run WhisperX in a worker thread and return word-level timestamps.
 
-    async def _run_aeneas(
-        self,
-        cache_dir: Path,
-        audio_path: Path,
-        paragraphs: list[str],
-    ) -> list[dict[str, str]]:
-        await self._update_status("aligning", progress=28)
+        Caches the transcript at `<cache_dir>/transcript.json` keyed on the
+        whisper model — iterating on the matching algorithm doesn't require
+        re-running the multi-minute transcription step.
+        """
+        await self._update_status("aligning", progress=30)
+        cache_path = self._cache_dir() / "transcript.json"
+        if cache_path.exists():
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if cached.get("model") == settings.whisper_model:
+                words = cached["words"]
+                logger.info("Using cached transcript (%d words)", len(words))
+                await self._update_status("aligning", progress=85, fragment_count=len(words))
+                return words
 
-        paragraphs_path = cache_dir / "paragraphs.txt"
-        paragraphs_path.write_text("\n".join(paragraphs) + "\n", encoding="utf-8")
-
-        raw_output_path = cache_dir / "aeneas_raw.json"
-        progress_q: multiprocessing.Queue = multiprocessing.Queue()  # type: ignore[type-arg]
-
-        async def drain_and_tick() -> None:
-            DTW_START = 42  # ticking begins once compute-head-tail fires
-            DTW_CEIL = 79   # never tick past here (create-sync-map fires at 80)
-            TICK_INTERVAL = 8.0  # seconds between auto-increments during DTW
-            current = 28
-            last_tick = asyncio.get_running_loop().time()
-            logger.debug("drain_and_tick started")
-
-            while True:
-                try:
-                    drained_any = False
-                    while not progress_q.empty():
-                        val = progress_q.get_nowait()
-                        current = max(current, val)
-                        logger.debug("drain_and_tick: queue → progress=%d", current)
-                        await self._update_status("aligning", progress=current)
-                        drained_any = True
-                        last_tick = asyncio.get_running_loop().time()
-
-                    in_dtw = DTW_START <= current < DTW_CEIL
-                    now = asyncio.get_running_loop().time()
-                    elapsed = now - last_tick
-                    if in_dtw and not drained_any and elapsed >= TICK_INTERVAL:
-                        current += 1
-                        logger.debug(
-                            "drain_and_tick: auto-tick → progress=%d (%.1fs elapsed)",
-                            current, elapsed,
-                        )
-                        await self._update_status("aligning", progress=current)
-                        last_tick = now
-                except asyncio.CancelledError:
-                    logger.debug("drain_and_tick: cancelled at progress=%d", current)
-                    raise
-                except Exception:
-                    logger.exception("drain_and_tick: error at progress=%d — continuing", current)
-
-                await asyncio.sleep(0.5)
-
-        result_q: multiprocessing.SimpleQueue = multiprocessing.SimpleQueue()
-        process = multiprocessing.Process(
-            target=_run_aeneas_in_process,
-            args=(audio_path, paragraphs_path, raw_output_path, progress_q, result_q),
+        words = await asyncio.to_thread(
+            _transcribe_audio_sync,
+            audio_path,
+            settings.whisper_model,
+            settings.whisper_device,
+            settings.whisper_compute_type,
+            settings.whisper_batch_size,
+            settings.whisper_language,
         )
-        drain_task = asyncio.create_task(drain_and_tick())
-        try:
-            process.start()
-            await asyncio.to_thread(process.join)
-            outcome = result_q.get() if not result_q.empty() else RuntimeError(
-                f"aeneas process exited with code {process.exitcode} and no result"
-            )
-            if isinstance(outcome, Exception):
-                raise outcome
-            # Fragments are already on disk; load them directly to avoid pipe-size limits
-            with raw_output_path.open() as f:
-                raw_data = json.load(f)
-            fragments: list[dict[str, str]] = raw_data["fragments"]
-        finally:
-            drain_task.cancel()
-            try:
-                await drain_task
-            except asyncio.CancelledError:
-                logger.debug("drain_task cancelled cleanly")
-            except Exception:
-                logger.exception("drain_task exited with exception")
-            if process.is_alive():
-                process.terminate()
-                process.join()
-
-        while not progress_q.empty():
-            await self._update_status("aligning", progress=progress_q.get_nowait())
-
-        await self._update_status("aligning", progress=88, fragment_count=len(fragments))
-        return fragments
+        cache_path.write_text(
+            json.dumps({"model": settings.whisper_model, "words": words}),
+            encoding="utf-8",
+        )
+        await self._update_status("aligning", progress=85, fragment_count=len(words))
+        return words
 
     async def _assemble_sync_map(
         self,
         cache_dir: Path,
-        fragments: list[dict[str, str]],
+        words: list[dict],  # type: ignore[type-arg]
         index: dict[str, dict[str, str]],
-        chapter_start: float,
         chapters: list[dict],  # type: ignore[type-arg]
-        first_chapter_spine_pos: int,
+        warnings: list[str] | None = None,
     ) -> None:
+        warnings = list(warnings or [])
         await self._update_status("assembling", progress=92)
 
         para_count = len(index)
-        frag_count = len(fragments)
-        if para_count != frag_count:
-            logger.warning(
-                "Fragment/paragraph mismatch: %d fragments, %d paragraphs — "
-                "aligning up to min(%d, %d)",
-                frag_count,
-                para_count,
-                frag_count,
-                para_count,
+        para_ids = list(index.keys())
+        paragraphs = [index[pid]["text"] for pid in para_ids]
+
+        transcript, ranges = await asyncio.to_thread(_build_transcript_index, words)
+        alignments = await asyncio.to_thread(
+            _align_paragraphs_to_transcript, paragraphs, transcript, ranges
+        )
+
+        unmatched = sum(1 for a in alignments if a is None)
+        if unmatched:
+            logger.info(
+                "Paragraphs not matched in transcript: %d/%d (likely EPUB-only content)",
+                unmatched, para_count,
             )
 
-        sync_map = []
-        count = min(para_count, frag_count)
-        # index is built in seq order in _parse_epub_sync; dicts preserve insertion order.
-        # Do NOT sort lexicographically — for books with ≥1000 paragraphs, "para_1000"
-        # sorts before "para_101", scrambling the fragment→para_id mapping.
-        para_ids = list(index.keys())[:count]
-
-        for i, para_id in enumerate(para_ids):
-            fragment = fragments[i]
+        sync_map: list[dict] = []  # type: ignore[type-arg]
+        for para_id, alignment in zip(para_ids, alignments):
+            if alignment is None:
+                continue
+            audio_start, audio_end = alignment
             entry = index[para_id]
-            sync_map.append(
-                {
-                    "id": para_id,
-                    "audio_start": float(fragment["begin"]) + chapter_start,
-                    "audio_end": float(fragment["end"]) + chapter_start,
-                    "ebook_pos": entry["ebook_pos"],
-                    "text_snippet": entry["text"],
-                }
-            )
+            sync_map.append({
+                "id": para_id,
+                "audio_start": audio_start,
+                "audio_end": audio_end,
+                "ebook_pos": entry["ebook_pos"],
+                "text_snippet": entry["text"],
+            })
 
-        if chapter_start > 0.0:
-            logger.info("Applied chapter start offset %.2fs to all sync map entries", chapter_start)
-
-        _rescale_to_chapters(sync_map, chapters, first_chapter_spine_pos)
-
-        # Drop fragments aeneas couldn't align: it places them at begin==end==audio_duration.
-        # Typical cause: EPUB back matter (Acknowledgments, About the Author, Copyright)
-        # that the audiobook doesn't narrate.
-        before = len(sync_map)
-        sync_map = [e for e in sync_map if e["audio_start"] != e["audio_end"]]
-        dropped = before - len(sync_map)
-        if dropped:
-            logger.warning(
-                "Dropped %d unaligned sync map entries (audio_start == audio_end); "
-                "EPUB likely has content beyond the audio range",
-                dropped,
+        # Enforce non-decreasing audio_start across consecutive entries in
+        # EPUB order. Fuzzy matching can pick the wrong occurrence of a
+        # repeated phrase inside a chapter (common in formulaic prose),
+        # producing local backward jumps. Squashing those to the predecessor's
+        # audio_end keeps the sync map usable for read-along (no rewinds when
+        # the reader advances paragraph-by-paragraph) at the cost of a few
+        # entries pointing slightly past their true audio position.
+        regressions = 0
+        prev_end = -1.0
+        for entry in sync_map:
+            if entry["audio_start"] < prev_end:
+                regressions += 1
+                entry["audio_start"] = prev_end
+                if entry["audio_end"] < prev_end:
+                    entry["audio_end"] = prev_end
+            prev_end = entry["audio_end"]
+        if regressions:
+            logger.info(
+                "Squashed %d backward timestamp regressions out of %d entries",
+                regressions, len(sync_map),
             )
 
         sync_map_path = cache_dir / "sync_map.json"
@@ -752,17 +916,31 @@ class AlignmentPipeline:
         )
 
         # Clean up ephemeral files
-        for ephemeral in ["concatenated.wav", "trimmed.wav", "paragraphs.txt", "aeneas_raw.json"]:
+        for ephemeral in ["concatenated.wav"]:
             (cache_dir / ephemeral).unlink(missing_ok=True)
 
+        total_duration = float(chapters[-1].get("end", 0) or 0) if chapters else 0.0
+        # No audio trim with WhisperX → audio_offset is always 0.
+        warnings.extend(_validate_sync_map(sync_map, {}, total_duration, 0.0))
+        # Coverage warning: lots of EPUB paragraphs that didn't match audio.
+        if para_count and unmatched / para_count > 0.10:
+            warnings.append(
+                f"low_transcript_coverage: {unmatched}/{para_count} paragraphs unmatched"
+            )
+
+        final_status = "complete_with_warnings" if warnings else "complete"
+        if warnings:
+            logger.warning("Sync map completed with %d warnings: %s", len(warnings), warnings)
+
         await self._update_status(
-            "complete",
+            final_status,
             progress=100,
             sync_map_path=str(sync_map_path),
-            fragment_count=frag_count,
+            fragment_count=len(sync_map),
             paragraph_count=para_count,
-            audio_offset_seconds=chapter_start if chapter_start > 0.0 else None,
+            audio_offset_seconds=None,
             completed_at=datetime.now(tz=UTC),
+            warnings=json.dumps(warnings) if warnings else None,
         )
 
     # ── helpers ─────────────────────────────────────────────────────────────────

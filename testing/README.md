@@ -19,33 +19,22 @@ Prints real-time stage progress and a sync map preview on completion.
 **1. Python environment**
 
 ```bash
-uv sync
+uv sync --extra align            # core deps + WhisperX + torch (requires Python 3.12 or 3.13)
 ```
 
 **2. System dependencies**
 
-aeneas requires `ffmpeg` and `espeak` (or `espeak-ng`):
+WhisperX needs `ffmpeg` for audio decoding:
 
 ```bash
 # macOS
-brew install ffmpeg espeak
+brew install ffmpeg
 
 # Debian / Ubuntu
-sudo apt-get install ffmpeg espeak
+sudo apt-get install ffmpeg
 ```
 
-**3. aeneas**
-
-aeneas is not in `pyproject.toml` due to its C extension build requirements.
-Install it separately into the project's virtualenv:
-
-```bash
-uv run pip install aeneas
-```
-
-If the install fails, follow the [aeneas installation guide](https://github.com/readbeyond/aeneas#installation).
-
-**4. `.env` configured**
+**3. `.env` configured**
 
 Copy `.env.example` to `.env` and set at minimum:
 
@@ -102,9 +91,9 @@ Pipeline progress:
   [14:05:17] Fetching ebook
   [14:05:19] Parsing EPUB and extracting paragraphs
              Paragraphs extracted: 3,847
-  [14:05:21] Running aeneas forced alignment
+  [14:05:21] Running WhisperX transcription + alignment
   [14:47:33] Assembling sync map
-             Fragments aligned:    3,847
+             Fragments aligned:    3,820
   [14:47:34] Complete
 
 Completed in 45m 33s
@@ -127,13 +116,16 @@ Sync map preview (first 10 entries):
 
 **Stage timestamps** — The wall-clock time at each status transition. The gap at
 `Fetching audio files` reflects download time (can be minutes for large books).
-The gap at `Running aeneas forced alignment` is the alignment itself — expect
-10–60 minutes depending on book length and hardware.
+The gap at `Running WhisperX transcription + alignment` is dominated by whisper
+inference — expect roughly 1× real-time on CPU with `tiny.en`, scaling with
+model size; CUDA cuts this 10×+. A 12-hour audiobook → ~1h on CPU `tiny.en`.
 
-**Paragraph / fragment mismatch** — A non-fatal warning printed when the counts
-differ. The sync map is truncated to `min(paragraphs, fragments)` entries.
-Mismatches typically indicate front matter, images, or non-paragraph text blocks
-in the EPUB that aeneas skipped.
+**Paragraph / fragment mismatch** — `fragment_count` is the number of
+**matched** paragraphs. When it's less than `paragraph_count`, WhisperX
+couldn't fuzzy-match those paragraphs to the audio transcript — typically
+front matter, back matter, or images. The skipped entries are dropped from
+the sync map; if more than 10% are dropped the job ends in
+`complete_with_warnings` with `low_transcript_coverage`.
 
 **Exit code** — `0` on success, `1` on failure. On failure, the error message is
 printed to stderr. Check `AlignmentJob.error_message` in the DB for the full
