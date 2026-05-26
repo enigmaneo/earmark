@@ -53,6 +53,7 @@ async def _poll_progress(
     last_status: str | None = None
     last_paragraph_count: int | None = None
     last_fragment_count: int | None = None
+    last_progress: int | None = None
 
     while True:
         async with session_factory() as session:
@@ -76,6 +77,10 @@ async def _poll_progress(
         if job.fragment_count is not None and job.fragment_count != last_fragment_count:
             print(f"           Fragments aligned:    {job.fragment_count:,}")
             last_fragment_count = job.fragment_count
+
+        if job.progress is not None and job.progress != last_progress:
+            print(f"  [{now}] progress: {job.progress}%")
+            last_progress = job.progress
 
         if stop_event.is_set():
             break
