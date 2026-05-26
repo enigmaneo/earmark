@@ -326,21 +326,29 @@ def _transcribe_audio_sync(
     compute_type: str,
     batch_size: int,
     language: str,
+    progress_cb: object = None,  # Callable[[float], None] | None
 ) -> list[dict]:  # type: ignore[type-arg]
     """Run WhisperX and return word-level timestamps as a flat list.
 
     Each entry: {"word": str, "start": float, "end": float} (absolute audio seconds).
+    When ``progress_cb`` is supplied, it is invoked with a float in 0..100 once
+    per processed segment (transcribe = 0..50, align = 50..100 via
+    ``combined_progress=True``).
     """
     import whisperx
 
     model = whisperx.load_model(model_name, device, compute_type=compute_type, language=language)
     audio = whisperx.load_audio(str(audio_path))
-    result = model.transcribe(audio, batch_size=batch_size, language=language)
+    result = model.transcribe(
+        audio, batch_size=batch_size, language=language,
+        combined_progress=True, progress_callback=progress_cb,
+    )
 
     align_model, metadata = whisperx.load_align_model(language_code=language, device=device)
     aligned = whisperx.align(
         result["segments"], align_model, metadata, audio, device,
         return_char_alignments=False,
+        combined_progress=True, progress_callback=progress_cb,
     )
 
     words: list[dict] = []  # type: ignore[type-arg]
@@ -358,6 +366,20 @@ def _transcribe_audio_sync(
 def _normalize_text(s: str) -> str:
     """Lowercase, strip non-alphanumeric to spaces, collapse whitespace."""
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", s.lower())).strip()
+
+
+# Job-progress range the WhisperX step occupies. Transcription + alignment is
+# the longest stage; allocating 30..85 keeps room for parse_epub (≤25),
+# assembly (~92), and final state (100).
+_WHISPER_PROGRESS_LO = 30
+_WHISPER_PROGRESS_HI = 85
+
+
+def _map_whisper_progress(percent: float) -> int:
+    """Map a WhisperX 0..100 progress value into the job's progress range."""
+    p = max(0.0, min(100.0, float(percent)))
+    span = _WHISPER_PROGRESS_HI - _WHISPER_PROGRESS_LO
+    return _WHISPER_PROGRESS_LO + int(p * span / 100)
 
 
 # EPUB chapter-heading detection ──────────────────────────────────────────────
@@ -896,31 +918,71 @@ class AlignmentPipeline:
         Caches the transcript at `<cache_dir>/transcript.json` keyed on the
         whisper model — iterating on the matching algorithm doesn't require
         re-running the multi-minute transcription step.
+
+        While WhisperX runs, segment-level progress is forwarded through a
+        thread-safe queue and written to ``alignment_jobs.progress`` so the
+        UI poll loop sees the job tick smoothly from 30 → 85 instead of
+        sitting frozen for the full transcription window.
         """
-        await self._update_status("aligning", progress=30)
+        await self._update_status("aligning", progress=_WHISPER_PROGRESS_LO)
         cache_path = self._cache_dir() / "transcript.json"
         if cache_path.exists():
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
             if cached.get("model") == settings.whisper_model:
                 words = cached["words"]
                 logger.info("Using cached transcript (%d words)", len(words))
-                await self._update_status("aligning", progress=85, fragment_count=len(words))
+                await self._update_status(
+                    "aligning", progress=_WHISPER_PROGRESS_HI, fragment_count=len(words),
+                )
                 return words
 
-        words = await asyncio.to_thread(
-            _transcribe_audio_sync,
-            audio_path,
-            settings.whisper_model,
-            settings.whisper_device,
-            settings.whisper_compute_type,
-            settings.whisper_batch_size,
-            settings.whisper_language,
-        )
+        import queue as _queue
+
+        prog_q: _queue.Queue = _queue.Queue()
+
+        def _cb(percent: float) -> None:
+            try:
+                prog_q.put_nowait(float(percent))
+            except Exception:  # pragma: no cover — never raise out of WhisperX
+                pass
+
+        async def _drain() -> None:
+            last_written = _WHISPER_PROGRESS_LO
+            while True:
+                try:
+                    item = await asyncio.to_thread(prog_q.get, True, 0.5)
+                except _queue.Empty:
+                    continue
+                if item is None:
+                    return
+                mapped = _map_whisper_progress(item)
+                if mapped > last_written:
+                    last_written = mapped
+                    await self._update_status("aligning", progress=mapped)
+
+        drain_task = asyncio.create_task(_drain())
+        try:
+            words = await asyncio.to_thread(
+                _transcribe_audio_sync,
+                audio_path,
+                settings.whisper_model,
+                settings.whisper_device,
+                settings.whisper_compute_type,
+                settings.whisper_batch_size,
+                settings.whisper_language,
+                _cb,
+            )
+        finally:
+            prog_q.put_nowait(None)  # sentinel — ends the drain loop
+            await drain_task
+
         cache_path.write_text(
             json.dumps({"model": settings.whisper_model, "words": words}),
             encoding="utf-8",
         )
-        await self._update_status("aligning", progress=85, fragment_count=len(words))
+        await self._update_status(
+            "aligning", progress=_WHISPER_PROGRESS_HI, fragment_count=len(words),
+        )
         return words
 
     async def _assemble_sync_map(

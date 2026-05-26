@@ -67,12 +67,15 @@ Pipeline progress:
   [17:07:08] Parsing EPUB and extracting paragraphs
              Paragraphs extracted: 3,434
   [17:07:24] Running WhisperX transcription + alignment
+             (progress ticks 30 → 85 segment-by-segment as WhisperX runs)
   [18:23:11] Complete
              Fragments aligned:    3,420
 
 Completed in 1h 16m
 …
 ```
+
+The `progress` column on the `AlignmentJob` row advances live during the WhisperX step thanks to `whisperx.transcribe`/`whisperx.align`'s `progress_callback`; watch with `sqlite3 earmark.db "SELECT status, progress FROM alignment_jobs ORDER BY id DESC LIMIT 1;"` for an external view.
 
 Expect transcription to dominate runtime — on CPU with the `tiny.en` model, a 12-hour audiobook takes roughly an hour; `base.en` is roughly 2×, and `medium.en` is 5×+. A CUDA GPU brings this down by an order of magnitude.
 

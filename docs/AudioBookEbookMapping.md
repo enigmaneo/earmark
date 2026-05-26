@@ -504,6 +504,8 @@ Word timestamps are **absolute** seconds in the original audio. No pre-trim is n
 
 The pipeline updates `status=aligning, progress=30` before transcription and `progress=85, fragment_count=len(words)` after. Transcription is the dominant cost: ~1× real-time on `tiny.en` CPU, scaling roughly linearly with model size; CUDA cuts this 10×+.
 
+**Live progress.** WhisperX accepts a `progress_callback` argument on both `transcribe()` and `align()` (with `combined_progress=True`, transcribe contributes 0..50 and align contributes 50..100). `_transcribe` wires a thread-safe callback that pushes each segment-complete event onto a `queue.Queue`; a concurrent drain coroutine maps the WhisperX percentage onto the job's 30–85 range via `_map_whisper_progress` and writes it to `alignment_jobs.progress`. So during a multi-hour run the mappings poll loop (`mappings/+page.svelte:64`) and the manual runner in `testing/test_alignment.py` both tick smoothly instead of sitting frozen at 30 for the entire WhisperX step. The cached-transcript path skips this — it never spins up the drain task and jumps straight to 85 in milliseconds.
+
 ---
 
 ## 12. Paragraph Matching (rapidfuzz)

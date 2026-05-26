@@ -16,6 +16,7 @@ from earmark.services.alignment import (
     _classify_spine_item,
     _element_full_xpath,
     _is_blurb_shaped,
+    _map_whisper_progress,
     _match_heading_to_abs_chapter,
     _validate_sync_map,
     recover_orphaned_jobs,
@@ -977,3 +978,29 @@ async def test_pipeline_warns_on_unmatched_chapter_heading(
     body = resp.json()
     assert body["status"] == "complete_with_warnings"
     assert any("unmatched_chapter_heading" in w for w in body["warnings"])
+
+
+# ── WhisperX progress mapping ──────────────────────────────────────────────────
+
+
+def test_map_whisper_progress_endpoints() -> None:
+    assert _map_whisper_progress(0) == 30
+    assert _map_whisper_progress(100) == 85
+
+
+def test_map_whisper_progress_midpoint() -> None:
+    # 50% of WhisperX run = halfway through 30..85
+    assert _map_whisper_progress(50) == 57  # 30 + int(50 * 55 / 100)
+
+
+def test_map_whisper_progress_clamps() -> None:
+    assert _map_whisper_progress(-10) == 30
+    assert _map_whisper_progress(200) == 85
+
+
+def test_map_whisper_progress_monotonic() -> None:
+    prev = -1
+    for p in range(0, 101, 5):
+        v = _map_whisper_progress(p)
+        assert v >= prev
+        prev = v
