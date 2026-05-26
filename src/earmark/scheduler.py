@@ -201,7 +201,7 @@ async def _sync_mapping(
         return
 
     job = mapping.alignment_job
-    if not job or job.status != "complete" or not job.sync_map_path:
+    if not job or job.status not in ("complete", "complete_with_warnings") or not job.sync_map_path:
         logger.warning("Skipping %s: no completed alignment job", abs_item_id)
         return
 
@@ -268,7 +268,7 @@ async def sync_progress() -> None:
             .join(AlignmentJob, AbsEbookMapping.alignment_job_id == AlignmentJob.id)
             .where(
                 AbsEbookMapping.kosync_document.isnot(None),
-                AlignmentJob.status == "complete",
+                AlignmentJob.status.in_(("complete", "complete_with_warnings")),
                 AlignmentJob.sync_map_path.isnot(None),
             )
         )

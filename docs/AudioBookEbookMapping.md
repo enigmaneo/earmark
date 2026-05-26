@@ -14,14 +14,14 @@ This document describes the pipeline that force-aligns an audiobook from Audiobo
 8. [The Core Mapping Mechanism](#8-the-core-mapping-mechanism)
 9. [Multi-File Audio Handling](#9-multi-file-audio-handling)
 10. [Audio Format Handling](#10-audio-format-handling)
-11. [Aeneas Preparation](#11-aeneas-preparation)
-12. [Forced Alignment](#12-forced-alignment)
-    - [12a. Audio Trimming (Chapter Offset)](#12a-audio-trimming-chapter-offset)
+11. [Audio Transcription (WhisperX)](#11-audio-transcription-whisperx)
+12. [Paragraph Matching (rapidfuzz)](#12-paragraph-matching-rapidfuzz)
 13. [Final Assembly](#13-final-assembly)
-    - [13a. Chapter-Based Rescaling](#13a-chapter-based-rescaling)
 14. [Output Schema](#14-output-schema)
 15. [Dependencies](#15-dependencies)
 16. [Error Handling](#16-error-handling)
+    - [16a. Validation Warnings](#16a-validation-warnings)
+17. [Verifying Alignment Against ABS](#17-verifying-alignment-against-abs)
 
 ---
 
@@ -38,10 +38,10 @@ ABS API
   └─► fetch item metadata & cache to DB (abs_library_items)
         └─► download audio files → local cache
               └─► download ebook → local cache
-                    └─► parse EPUB, extract paragraphs, build index
-                          └─► write paragraphs.txt for aeneas
-                                └─► run aeneas forced alignment
-                                      └─► merge timestamps + EPUB positions → sync_map.json
+                    └─► parse EPUB, classify spine, extract bodymatter paragraphs
+                          └─► concatenate audio → WhisperX transcribe (word-level timestamps)
+                                └─► fuzzy-match EPUB paragraphs to transcript (rapidfuzz)
+                                      └─► validate + write sync_map.json (warnings → status)
 ```
 
 Progress for each run is tracked in the `alignment_jobs` database table, updated at each stage so the job can be monitored or resumed after failure.
@@ -304,16 +304,17 @@ All downloaded and intermediate files live under `.cache/earmark/` within the pr
     audio/
       001_Chapter01.mp3    ← zero-padded index prefix preserves playback order
       002_Chapter02.mp3
-    concatenated.wav       ← ephemeral; created before trim step, deleted after
-    trimmed.wav            ← ephemeral; chapter-trimmed audio fed to aeneas, deleted after
+    concatenated.wav       ← ephemeral; fed to WhisperX, deleted after assembly
+    transcript.json        ← durable; cached WhisperX word-level output (see below)
     ebook.epub
-    paragraphs.txt         ← ephemeral; one paragraph per line, fed to aeneas
     sync_map.json          ← durable output artifact
 ```
 
 **Cache invalidation:** On pipeline start, `metadata.json` is read and its `updatedAt` value is compared against the live ABS API. If ABS is newer, all cached files for that item are deleted and re-downloaded.
 
-`concatenated.wav` and `paragraphs.txt` are always regenerated from scratch and removed after the pipeline completes. They are not considered durable.
+`concatenated.wav` is regenerated each run and removed after the pipeline completes.
+
+`transcript.json` is the cached WhisperX output (word list + the `whisper_model` it was produced with). Subsequent runs skip the multi-minute transcription step when this file exists and the cached model name matches `settings.whisper_model`. Delete it manually to force a re-transcription (e.g. after changing to a larger model).
 
 `sync_map.json` is the final artifact. Its path is written to `alignment_jobs.sync_map_path`.
 
@@ -329,9 +330,13 @@ from ebooklib import epub
 from bs4 import BeautifulSoup
 
 book = epub.read_epub(ebook_path)
-paragraphs = []
+first_body_pos, last_body_pos, _ = _classify_spine(book)  # see §6a
 
-for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+paragraphs = []
+for spine_pos, (item_id, _attrs) in enumerate(book.spine, start=1):
+    if spine_pos < first_body_pos or spine_pos > last_body_pos:
+        continue
+    item = book.get_item_with_id(item_id)
     soup = BeautifulSoup(item.get_content(), "html.parser")
     for p in soup.find_all("p"):
         text = p.get_text(separator=" ").strip()
@@ -339,9 +344,24 @@ for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
             paragraphs.append((item.file_name, p, text))
 ```
 
-Paragraphs are collected in EPUB spine order. Empty paragraphs (whitespace-only after stripping) are skipped. Each surviving paragraph is assigned a sequential ID: `para_001`, `para_002`, and so on.
+Paragraphs are collected in EPUB spine order, restricted to the **bodymatter range** `[first_body_pos, last_body_pos]` (1-based, inclusive). Empty paragraphs are skipped. Each surviving paragraph is assigned a sequential ID: `para_001`, `para_002`, …
 
 The job's `status` is set to `parsing_epub` at the start of this stage, and `paragraph_count` is set to the final count on completion.
+
+### 6a. Front/Back Matter Detection (`_classify_spine`)
+
+`_classify_spine` walks the EPUB spine and classifies each item as `front`, `back`, `body`, `ambiguous`, or `skip`. The bodymatter range is the position of the first `body` item through the position of the last `body` item, inclusive — anything outside that range is dropped.
+
+Classification uses four signals, in priority order:
+
+1. **EPUB3 `nav` landmarks** — when a `<nav epub:type="landmarks">` element is present in the EPUB navigation document, an `<a>` whose `epub:type` is `frontmatter`, `bodymatter`, or `backmatter` is authoritative for that spine item. This is the cleanest signal and always wins.
+2. **Spine `linear="no"`** — items the publisher flagged as non-linear (covers, supplementary pages) are classified `front`.
+3. **TOC title and spine filename/id substrings** — the TOC title (lowercase, whitespace-collapsed) is tested against a phrase list (`_FRONT_PHRASES`, `_BACK_PHRASES` — "praise", "dedication", "contents", "copyright", "about the author", "acknowledgments", "glossary", "bibliography", …). The spine item's `file_name` and `id` (joined and lowercased with `-` → `_`) are tested against substring tokens (`_FRONT_FILE_TOKENS`, `_BACK_FILE_TOKENS` — "frontmatter", "copyright", "dedication", "halftitle", "acknowledg", "about_the_author", "backmatter", …). Tokens like `also_by` and `acknowledg` appear on both sides; an item that matches both is `ambiguous`.
+4. **Content shape** — items dominated by short attribution lines (`— The New York Times`) or `<blockquote>`/`<cite>` content are `front` (`_is_blurb_shaped`). Items with fewer than two paragraphs of ≥40 characters are `ambiguous` (likely chapter dividers or end-of-book ad pages).
+
+A strong **body** signal (an `<h1>`/`<h2>` that matches `prologue|epilogue|chapter|book|part|<digit>|<roman>`) overrides front-matter filename hints. This is what catches the common case where a publisher names a spine item `frontmatter02.xhtml` but it actually contains the Prologue.
+
+When the EPUB ships with `nav` landmarks, classification is essentially exact. Without landmarks, the heuristic still handles the practical cases seen in commercial releases: drift in the heuristic shows up later as warnings (see [§16a](#16a-validation-warnings)).
 
 ---
 
@@ -382,259 +402,196 @@ This format is critical: KOReader's CRE engine navigates positions using the rea
 
 This is the critical design invariant: **the sequential paragraph ID is the sole join key between the audio timeline and the EPUB position.**
 
-The mechanism relies on three steps that all share the same sequential order:
+EPUB paragraphs are matched to audio time ranges by fuzzy-matching paragraph text against the WhisperX word-level transcript. The matcher uses **proportional positioning** — paragraph `i` of `n` is searched in a window centered on the transcript character offset `total * i/n`:
 
 ```
 EPUB spine (reading order)
   │
   ▼
-Extract paragraphs → assign IDs in order
-  para_001  "It was the best of times..."     ebook_pos = /body/DocFragment[1]/body/section[1]/p[1]
-  para_002  "it was the worst of times..."    ebook_pos = /body/DocFragment[1]/body/section[1]/p[2]
-  para_003  "it was the age of wisdom..."     ebook_pos = /body/DocFragment[1]/body/section[1]/p[3]
+Extract paragraphs (bodymatter only) → assign IDs in order
+  para_000  "It was the best of times..."     ebook_pos = /body/DocFragment[1]/body/section[1]/p[1]
+  para_001  "it was the worst of times..."    ebook_pos = /body/DocFragment[1]/body/section[1]/p[2]
   │
   ▼
-Write paragraphs.txt in the SAME order (line N = para_N)
-  line 1:  "It was the best of times..."
-  line 2:  "it was the worst of times..."
-  line 3:  "it was the age of wisdom..."
+WhisperX transcribes the audio → word-level timestamps
+  [
+    {"word": "it", "start": 0.10, "end": 0.18},
+    {"word": "was", "start": 0.19, "end": 0.30},
+    ...
+  ]
   │
   ▼
-aeneas returns fragments in the SAME order (fragment[i] = line i+1)
-  fragment[0]:  begin=0.000   end=5.210
-  fragment[1]:  begin=5.210   end=12.100
-  fragment[2]:  begin=12.100  end=18.700
-  │
-  ▼
-Merge: fragment[i] → para_{i+1:03d} → index[para_id].ebook_pos
+Build a normalized transcript string + (char → time) mapping.
+For each paragraph in order, rapidfuzz finds the best partial-ratio
+substring match in a window centered on its proportional position.
+The matched char range maps back to (audio_start, audio_end).
+Paragraphs whose best score is below `min_score=45` are recorded
+as None and dropped.
 
-  para_001: audio 0.000–5.210   ebook_pos /body/DocFragment[1]/body/section[1]/p[1]
-  para_002: audio 5.210–12.100  ebook_pos /body/DocFragment[1]/body/section[1]/p[2]
-  para_003: audio 12.100–18.700 ebook_pos /body/DocFragment[1]/body/section[1]/p[3]
+  para_000: audio 0.10–5.21    ebook_pos /body/DocFragment[1]/body/section[1]/p[1]
+  para_001: audio 5.30–12.10   ebook_pos /body/DocFragment[1]/body/section[1]/p[2]
 ```
 
-**Invariant to preserve:** `paragraphs.txt` must be written in exactly the same order the IDs were assigned during extraction. aeneas guarantees its output fragments are in input line order. Therefore `fragment[N-1]` unambiguously maps to `para_{N:03d}` without any text matching or fuzzy lookup.
+**Invariant:** every paragraph is searched independently in a window around its proportional expected position — there is no forward cursor that consecutive paragraphs share. This dropped an earlier failure mode where a single fuzzy mismatch near the start of a long book pushed the cursor far ahead of where later paragraphs actually appear, starving them of search range. Monotonicity is restored later by the anchor + linear-interpolation post-pass (see §13). Paragraphs that don't appear in the audio (front-matter blurbs, back-matter acknowledgments) score below `min_score` and are dropped from the final map — they never poison the alignment of surrounding paragraphs.
 
 ---
 
 ## 9. Multi-File Audio Handling
 
-Audiobookshelf commonly stores audiobooks as a folder of MP3 files — one per chapter. aeneas expects a single audio file. Two strategies are supported:
-
-### Strategy A — Concatenate then trim (preferred)
+Audiobookshelf commonly stores audiobooks as a folder of MP3 files — one per chapter. WhisperX expects a single audio file. The pipeline concatenates files in `index` order with ffmpeg:
 
 1. Sort `audioFiles` by their `index` field (ascending).
-2. Write an ffmpeg concat list:
-   ```
-   file '/path/to/cache/audio/001_Chapter01.mp3'
-   file '/path/to/cache/audio/002_Chapter02.mp3'
-   ```
-3. Concatenate and normalize for aeneas:
+2. Write an ffmpeg concat list of absolute paths.
+3. Concatenate and normalize:
    ```bash
    ffmpeg -f concat -safe 0 -i filelist.txt -ar 16000 -ac 1 concatenated.wav
    ```
-4. **Trim** the concatenated audio to the first chapter start time (see [§12a Audio Trimming](#12a-audio-trimming-chapter-offset)):
-   ```bash
-   ffmpeg -ss {chapter_start} -i concatenated.wav -ar 16000 -ac 1 trimmed.wav
-   ```
-5. Feed `trimmed.wav` to aeneas.
+4. Pass `concatenated.wav` to WhisperX.
 
-### Strategy B — Per-file with offsets (fallback)
-
-Used when concatenation fails (e.g., mixed codecs, codec errors) or total audio exceeds a memory threshold.
-
-1. Sort audio files by `index`.
-2. Maintain a `cumulative_offset` starting at `0.0`.
-3. For each file:
-   a. Run aeneas on the file independently against the subset of paragraphs it covers.
-   b. Add `cumulative_offset` to every `begin`/`end` value in the fragment output.
-   c. Advance `cumulative_offset` by the file's `duration` (from ABS metadata).
-4. Concatenate all offset-adjusted fragment lists in file order.
-
-Paragraph-to-file assignment (for Strategy B): divide paragraphs evenly by ABS chapter metadata if available, otherwise divide proportionally by file duration.
+If the audio is already a single `.mp3`, `.m4b`, or `.m4a` file, concatenation is skipped and the original file is fed in directly — WhisperX handles those formats via its internal ffmpeg call.
 
 ---
 
 ## 10. Audio Format Handling
 
-| Format | Type | Strategy |
-|--------|------|----------|
-| `.mp3` | Single or multi-file | Concatenate if multi; pass directly if single |
-| `.m4b` | Single AAC container | Pass directly — aeneas uses ffmpeg internally |
-| `.m4a` | Single AAC | Same as `.m4b` |
-| `.flac` | Lossless, single or multi | Pre-convert each file to WAV via ffmpeg |
-| `.ogg` / `.opus` | Vorbis/Opus | Pre-convert each file to WAV via ffmpeg |
-| `.aac` | Raw AAC | Pre-convert to WAV via ffmpeg |
+| Format | Notes |
+|--------|-------|
+| `.mp3` | Single or multi-file. Multi-file → concatenate. Single → pass directly. |
+| `.m4b` | Single AAC audiobook container. Passed directly. |
+| `.m4a` | Single AAC. Same as `.m4b`. |
+| `.flac` / `.ogg` / `.opus` / `.aac` | Concatenated to WAV at 16 kHz mono via ffmpeg before WhisperX. |
 
-**Format detection:** Read the `ext` field on each `audioFile` object from the ABS metadata. If all files share the same extension, apply the corresponding strategy. If files are mixed format (unlikely but possible), normalize all to WAV first.
-
-**Pre-conversion command** (for formats other than `.mp3` and `.m4b`):
-```bash
-ffmpeg -i input.flac -ar 16000 -ac 1 output.wav
-```
-
-`-ar 16000 -ac 1` (16 kHz mono PCM) is the recommended input specification for aeneas. Applying it at the pre-conversion step — rather than leaving it to aeneas — avoids codec edge cases and produces predictable behavior across formats.
+`-ar 16000 -ac 1` (16 kHz mono PCM) is what WhisperX expects internally — pre-normalizing avoids codec edge cases and keeps memory predictable across formats.
 
 ---
 
-## 11. Aeneas Preparation
+## 11. Audio Transcription (WhisperX)
 
-Before calling aeneas, write the extracted text to a plain text file — one paragraph per line, in `para_XXX` order, with no blank lines.
-
-```python
-with open(paragraphs_path, "w", encoding="utf-8") as f:
-    for para_id in index:   # insertion order = seq order (para_000, para_001, ...)
-        f.write(index[para_id]["text"] + "\n")
-```
-
-**Do not sort `index.keys()` lexicographically.** For books with ≥1000 paragraphs the IDs cross the 3-digit/4-digit boundary, and `sorted()` puts `"para_1000"` between `"para_100"` and `"para_101"`, scrambling the fragment→id mapping. Python dicts preserve insertion order since 3.7, so iterating `index` directly gives the correct seq order.
-
-Blank lines must be excluded: aeneas treats every line — including blank ones — as a text fragment to align. A blank line would produce a spurious fragment that shifts all subsequent ID mappings by one.
-
----
-
-## 12. Forced Alignment
-
-aeneas is invoked programmatically via `aeneas.executetask.ExecuteTask`:
+WhisperX transcribes the concatenated audio and produces **word-level timestamps** via wav2vec2 forced alignment. It replaces the previous aeneas + chapter-rescaling pipeline. The key win: alignment is now text-based, not positional — front matter, back matter, intro tracks, and split chapters no longer cascade errors through the rest of the book.
 
 ```python
-from aeneas.executetask import ExecuteTask
-from aeneas.task import Task
+import whisperx
 
-config_str = (
-    "task_language=eng"
-    "|is_text_type=plain"
-    "|os_task_file_format=json"
-    "|task_adjust_boundary_algorithm=rate"
-    "|task_adjust_boundary_rate_value=21"
+model = whisperx.load_model(model_name, device, compute_type=compute_type, language=lang)
+audio = whisperx.load_audio(str(audio_path))
+result = model.transcribe(audio, batch_size=batch_size, language=lang)
+
+align_model, metadata = whisperx.load_align_model(language_code=lang, device=device)
+aligned = whisperx.align(
+    result["segments"], align_model, metadata, audio, device,
+    return_char_alignments=False,
 )
 
-task = Task(config_string=config_str)
-task.audio_file_path_absolute = str(audio_path)          # concatenated.wav or single file
-task.text_file_path_absolute = str(paragraphs_path)      # paragraphs.txt
-task.sync_map_file_path_absolute = str(raw_output_path)  # aeneas_raw.json
-
-ExecuteTask(task).execute()
-task.output_sync_map_file()
+words = [
+    {"word": w["word"], "start": float(w["start"]), "end": float(w["end"])}
+    for seg in aligned["segments"]
+    for w in seg.get("words", [])
+    if "start" in w and "end" in w
+]
 ```
 
-**Key configuration parameters:**
+Word timestamps are **absolute** seconds in the original audio. No pre-trim is needed; intros and credits just don't get matched to any EPUB paragraph.
 
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| `task_language` | `eng` | Language for TTS synthesis used in alignment |
-| `is_text_type` | `plain` | One fragment per line (matches `paragraphs.txt` format) |
-| `os_task_file_format` | `json` | Output format for the sync map |
-| `task_adjust_boundary_algorithm` | `rate` | Adjusts boundaries to respect max reading rate |
-| `task_adjust_boundary_rate_value` | `21` | Max characters per second (typical audiobook pace) |
+**Configuration** (all via `Settings` / env vars):
 
-**Raw aeneas output format:**
+| Setting | Default | Notes |
+|---------|---------|-------|
+| `WHISPER_MODEL` | `tiny.en` | `tiny.en` / `base.en` / `small.en` / `medium.en` / `large-v3` |
+| `WHISPER_DEVICE` | `cpu` | `cuda` for NVIDIA GPU; `mps` experimentally on Apple Silicon |
+| `WHISPER_COMPUTE_TYPE` | `int8` | `float16` on GPU |
+| `WHISPER_BATCH_SIZE` | `16` | Higher uses more memory |
+| `WHISPER_LANGUAGE` | `en` | wav2vec2 alignment model is loaded per-language |
 
-```json
-{
-  "fragments": [
-    {
-      "id": "f000001",
-      "begin": "0.000",
-      "end": "5.210",
-      "lines": ["It was the best of times..."],
-      "children": []
-    }
-  ]
-}
-```
+The pipeline updates `status=aligning, progress=30` before transcription and `progress=85, fragment_count=len(words)` after. Transcription is the dominant cost: ~1× real-time on `tiny.en` CPU, scaling roughly linearly with model size; CUDA cuts this 10×+.
 
-`begin` and `end` are string-encoded float seconds. The `fragments` array is in the same order as the input lines.
+---
 
-The job's `status` is set to `aligning` before this call, and `fragment_count` is set to `len(fragments)` on completion.
+## 12. Paragraph Matching (rapidfuzz)
 
-### 12a. Audio Trimming (Chapter Offset)
-
-Many audiobooks open with a few seconds of publisher intro, narration of title/author, or music before the first chapter begins. If aeneas receives the full audio including this intro, it forces the early paragraphs of the first chapter to "consume" the intro section, producing timestamps that are systematically too late for all subsequent paragraphs.
-
-**Fix:** trim the audio to the first chapter start before running aeneas.
-
-The first chapter start time is taken from `media.chapters[1]["start"]` in the ABS item metadata (index 1 skips the intro track at index 0). If the chapters list has fewer than 2 entries, no trimming is done.
+WhisperX gives a stream of timestamped words. Each EPUB paragraph is mapped onto a contiguous run of those words by **proportional-position fuzzy substring matching**.
 
 ```python
-chapters = item_metadata["media"]["chapters"]
-chapter_start = float(chapters[1]["start"]) if len(chapters) >= 2 else 0.0
+def _build_transcript_index(words):
+    # Concatenate normalized words into a single transcript; record each
+    # word's (char_start, char_end, time_start, time_end).
+    ...
 
-# trim concatenated.wav → trimmed.wav
-ffmpeg.input(str(concat_path), ss=chapter_start) \
-      .output(str(trimmed_path), ar=16000, ac=1, acodec="pcm_s16le") \
-      .run(quiet=True)
+def _align_paragraphs_to_transcript(paragraphs, transcript, ranges,
+                                    min_score=45.0):
+    from rapidfuzz import fuzz
+    n, total = len(paragraphs), len(transcript)
+    for i, p in enumerate(paragraphs):
+        p_norm = _normalize_text(p)
+        if not p_norm:
+            yield None
+            continue
+        expected = int(total * (i / n))
+        half = max(8_000, len(p_norm) * 5)
+        win_start = max(0, expected - half)
+        win_end   = min(total, expected + half)
+        m = fuzz.partial_ratio_alignment(p_norm, transcript[win_start:win_end])
+        if m.score < min_score:
+            yield None                                  # not narrated in audio
+            continue
+        m_start = win_start + m.dest_start
+        m_end   = win_start + m.dest_end
+        t_start = ranges[_word_index_at_char(ranges, m_start)][2]
+        t_end   = ranges[_word_index_at_char(ranges, max(m_end - 1, m_start))][3]
+        yield (t_start, t_end)
 ```
 
-aeneas is then run on `trimmed.wav`. Its output timestamps start at 0.0 (relative to the trimmed file). After assembly, `chapter_start` is added to every `audio_start` and `audio_end` value to convert back to absolute audio positions.
+Two properties matter:
 
-**Effect:** without trimming, errors of 15–35 seconds were observed in the first chapter of a tested audiobook. With trimming, errors reduced to 4–5 seconds.
+1. **Proportional positioning.** Each paragraph is searched in its own window centered on `total * i/n` — there is no shared cursor that consecutive paragraphs advance. An earlier implementation kept a forward cursor; on a long book like *Winter's Heart* one mismatched fuzzy hit could drift the cursor several thousand characters past expected, so later paragraphs found their window starting beyond their actual narration. Independent windows fix that, at the cost of allowing local out-of-order matches inside a chapter (a phrase that repeats two pages apart can match either occurrence). The anchor + interpolation pass in §13 restores strict monotonicity.
+2. **Per-paragraph score gate.** If the best match scores below `min_score=45`, the paragraph is recorded as `None` and dropped from the final sync map. This is how unnarrated back matter (acknowledgments, copyright pages) and unmapped front matter naturally fall out of the result. The threshold sits below the default `60` because `tiny.en`/`base.en` transcripts have non-trivial word-level noise; values much higher cause whole chapters to fail matching on small models.
+
+Together with chapter snapping (§13), this lets the pipeline degrade gracefully when ABS audio splits a chapter that the EPUB keeps whole, or when either side has extra material.
+
+The job's `status` is set to `assembling, progress=92` after transcription finishes and matching begins.
 
 ---
 
 ## 13. Final Assembly
 
-Load the aeneas raw output and merge with the in-memory index using positional order:
+Matched paragraphs are written to `sync_map.json` in EPUB order:
 
 ```python
-import json
-
-with open(raw_output_path) as f:
-    aeneas_output = json.load(f)
-
-fragments = aeneas_output["fragments"]
-para_ids = list(index.keys())  # seq order — see §11
 sync_map = []
-
-for i, fragment in enumerate(fragments):
-    para_id = para_ids[i]
+for para_id, alignment in zip(para_ids, alignments):
+    if alignment is None:
+        continue                                          # skipped — see §12
+    audio_start, audio_end = alignment
     entry = index[para_id]
-
     sync_map.append({
         "id": para_id,
-        "audio_start": float(fragment["begin"]),
-        "audio_end": float(fragment["end"]),
+        "audio_start": audio_start,
+        "audio_end": audio_end,
         "ebook_pos": entry["ebook_pos"],
         "text_snippet": entry["text"],
     })
 
-# Drop fragments aeneas couldn't align (begin == end, parked at audio duration).
-# Typical cause: EPUB back matter (acknowledgments, copyright) not in the audiobook.
-sync_map = [e for e in sync_map if e["audio_start"] != e["audio_end"]]
-
-with open(sync_map_path, "w", encoding="utf-8") as f:
-    json.dump(sync_map, f, indent=2, ensure_ascii=False)
+sync_map_path.write_text(json.dumps(sync_map, indent=2, ensure_ascii=False))
 ```
 
-After writing `sync_map.json`, the `alignment_jobs` row is updated:
+Two refinement passes run on `sync_map` before it's persisted:
+
+1. **Chapter snap.** Every entry whose `ebook_pos` ends in `/h[1-6][N]` and whose `text_snippet` matches `PROLOGUE` / `EPILOGUE` / `CHAPTER N` (Arabic or Roman) is forced to the corresponding ABS `chapters[i].start`. `_match_heading_to_abs_chapter` does the lookup by parsing the chapter number from the heading text and finding the ABS chapter whose `title` contains the same number (or the first `Prologue` chapter that doesn't look like a "Part 2+" split). ABS chapter starts are publisher-supplied ground truth; without this step, fuzzy-match drift accumulates to tens of minutes over a long book. Headings with no ABS counterpart get an `unmatched_chapter_heading` warning and are left at their fuzzy-matched time.
+2. **Anchor + interpolation.** A forward scan picks every entry whose `audio_start ≥ previous_anchor.audio_end` as an anchor (the chapter-snapped entries are anchors by virtue of being on the audio timeline). Each run of non-anchor entries between two consecutive anchors is linearly re-distributed across the time span between them. This bounds local drift to a single chapter and guarantees monotonic timestamps.
+
+After these passes, the pipeline runs `_validate_sync_map` (see [§16a](#16a-validation-warnings)) and any warnings are persisted on the `alignment_jobs.warnings` column (JSON-encoded `list[str]`). The job's terminal `status` is:
+
+- `complete` — no warnings, sync map fully usable
+- `complete_with_warnings` — warnings present but sync map is still readable through the API
 
 ```python
-job.status = "complete"
+job.status = "complete_with_warnings" if warnings else "complete"
 job.sync_map_path = str(sync_map_path)
-job.fragment_count = len(fragments)
+job.fragment_count = len(sync_map)
+job.warnings = json.dumps(warnings) if warnings else None
 job.completed_at = datetime.utcnow()
 ```
 
-Ephemeral files (`concatenated.wav`, `trimmed.wav`, `paragraphs.txt`, `aeneas_raw.json`) are deleted after successful assembly.
-
-### 13a. Chapter-Based Rescaling
-
-Even after trimming, aeneas's DTW alignment tends to absorb inter-paragraph silence into the preceding fragment, causing within-chapter timestamps to drift 2–5 seconds from reality. Chapter-based rescaling corrects this by using ABS chapter boundaries as hard anchors.
-
-**Algorithm:** after building the initial sync map (with `chapter_start` offset applied), group entries by their `DocFragment[N]` spine position. Map each spine position to an ABS chapter using the assumption that `chapters[1]` corresponds to `DocFragment[first_chapter_spine_pos]`, `chapters[2]` to the next spine item, and so on. Then linearly rescale all timestamps within each group to fit exactly within `[chapters[ch_idx]["start"], chapters[ch_idx+1]["start"]]`.
-
-```python
-scale = abs_ch_duration / aeneas_ch_duration
-for entry in chapter_entries:
-    entry["audio_start"] = abs_ch_start + (entry["audio_start"] - aeneas_ch_start) * scale
-    entry["audio_end"]   = abs_ch_start + (entry["audio_end"]   - aeneas_ch_start) * scale
-```
-
-**Assumption:** ABS chapters are granular enough to correspond 1:1 with EPUB spine items. This holds for audiobooks where each chapter is a separate audio file (common for commercially released audiobooks). If ABS has very few coarse chapters, the rescaling is still applied but has less effect.
-
-**Effect:** combined with audio trimming, rescaling reduced per-paragraph timing errors from 4–5 seconds down to ±2 seconds in testing.
-
-**Limitation:** the remaining ±2 second error is inherent DTW drift and cannot be reduced without replacing aeneas with a VAD-based or transformer-based aligner (e.g., WhisperX, wav2vec2-MFA).
+The only ephemeral file is `concatenated.wav`, deleted on success. `transcript.json` (the cached WhisperX word list) survives between runs — see §5. WhisperX model weights are cached by `huggingface_hub` outside of the project tree.
 
 ---
 
@@ -677,29 +634,22 @@ The array is ordered by `audio_start` (ascending), which matches EPUB reading or
 
 ## 15. Dependencies
 
-The following packages are added to `pyproject.toml`:
-
 | Package | Purpose |
 |---------|---------|
 | `ebooklib` | Open and iterate EPUB spine documents |
 | `beautifulsoup4` | Parse HTML within EPUB document items |
-| `aeneas` | Forced alignment engine |
+| `whisperx` (optional `align` extra) | Whisper transcription + wav2vec2 forced alignment |
+| `rapidfuzz` | Monotonic fuzzy substring matching of paragraphs to transcript |
 | `ffmpeg-python` | Audio concatenation and format normalization |
 
-**System dependencies** (must be installed separately):
+The `whisperx` dependency lives behind the `align` optional extra (`pip install -e ".[align]"`). It pulls in PyTorch, which currently ships wheels only for Python ≤3.13.
 
-- `ffmpeg` — required by aeneas for audio decoding and by the concatenation step
-- `espeak` (or `espeak-ng`) — required by aeneas for TTS synthesis during alignment
+**System dependencies:**
 
-Install on macOS:
-```bash
-brew install ffmpeg espeak
-```
+- `ffmpeg` — audio decoding and concatenation
 
-Install on Debian/Ubuntu:
-```bash
-apt-get install ffmpeg espeak
-```
+Install on macOS: `brew install ffmpeg`
+Install on Debian/Ubuntu: `apt-get install ffmpeg`
 
 ---
 
@@ -715,8 +665,39 @@ apt-get install ffmpeg espeak
 | Audio download HTTP error | `fetching_audio` | Retry 3× with exponential backoff; fail job after exhaustion |
 | Ebook download HTTP error | `fetching_ebook` | Retry 3× with exponential backoff; fail job after exhaustion |
 | Unsupported audio format | `fetching_audio` | Set `status=failed`, `error_message="Unsupported audio format: {ext}"` |
-| ffmpeg concatenation error | `aligning` | Fall back to per-file Strategy B; if that also fails, set `status=failed` |
-| aeneas raises an exception | `aligning` | Capture exception message; set `status=failed`, `error_message=str(e)` |
-| Fragment / paragraph count mismatch | `assembling` | Log warning; align up to `min(fragment_count, paragraph_count)` entries |
+| ffmpeg concatenation error | `aligning` | Set `status=failed`, `error_message=str(e)` |
+| WhisperX raises an exception | `aligning` | Capture exception message; set `status=failed`, `error_message=str(e)` |
 | Cache stale (`abs_updated_at` newer) | Pre-flight | Delete cached files; create a new `AlignmentJob` row; re-run from scratch |
 | Partial cache (audio present, ebook missing) | Pre-flight | Re-download missing files only; reuse what is present |
+
+### 16a. Validation Warnings
+
+After matching, `_validate_sync_map` scores the result. Any warnings are stored as a JSON list on `AlignmentJob.warnings` and the job's status becomes `complete_with_warnings` (sync map is still readable through the API).
+
+| Warning string | Trigger |
+|---|---|
+| `suspect_first_entry: '<snippet>'` | `sync_map[0].text_snippet` is shorter than 40 characters or matches the blurb attribution pattern `^[—\-–]\s*[A-Z]`. Usually means front matter slipped through `_classify_spine`. |
+| `docfragment_gap: missing [N, …]` | More than two `DocFragment[N]` spine positions are absent between the first and last entry in the final sync map. Indicates whole chapters were skipped — likely a misclassification or a transcript coverage problem. |
+| `low_transcript_coverage: N/M paragraphs unmatched` | More than 10% of EPUB paragraphs failed to fuzzy-match (`score < 45`). Usual causes: back matter still in the EPUB, transcript model too small for the speaker, or large audio gaps. |
+| `unmatched_chapter_heading: '<text>'` | An EPUB chapter heading (h1/h2/h3 matching `PROLOGUE` / `EPILOGUE` / `CHAPTER N`) had no counterpart in the ABS `chapters` metadata, so it could not be snapped to a ground-truth start time. The entry is left at its fuzzy-matched position. Usual cause: the ABS chapter title omits the chapter number or uses an unusual format. |
+| `audio_offset_excessive: …` | *(legacy)* the WhisperX pipeline never pre-trims audio (`audio_offset` is always `0`), so this rule never fires. Preserved in `_validate_sync_map` for the older aeneas API. |
+| `chapter_rescale_extreme: …` | *(legacy)* the WhisperX pipeline doesn't do chapter rescaling, so its `scales` argument is always empty and this rule never fires. Preserved in `_validate_sync_map` for older callers. |
+
+Operationally: a `complete_with_warnings` job is still consumable — the sync map is written and the API serves it. Warnings just surface what to check: usually re-classifying spine items or bumping `WHISPER_MODEL` to `base.en`/`small.en` resolves the underlying issue.
+
+---
+
+## 17. Verifying Alignment Against ABS
+
+After a job completes, `testing/diff_chapters.py` compares each EPUB chapter heading in `sync_map.json` against the corresponding ABS chapter start. It picks one of two matching modes automatically:
+
+- **`title`** — used when the ABS chapter titles carry chapter numbers (e.g. `Chapter 12: A Lily in Winter`). EPUB headings parse to `chapter 12` / `prologue` / `epilogue` (Arabic or Roman) and look up the ABS chapter by number.
+- **`positional (offset=N)`** — used when fewer than half the headings match by title (e.g. ABS labels them `01-68 Remarkably Bright Creatures`). The script finds the offset `N` that minimises mean `|sync_start − abs_start|` across all headings and aligns the *k*-th EPUB heading with the *(N+k)*-th ABS chapter.
+
+```bash
+uv run python testing/diff_chapters.py --item-id <ABS_ITEM_ID> --threshold 5.0
+```
+
+Output is a per-chapter table with `sync_start`, `abs_start`, signed diff, and the ABS title; rows above `--threshold` (default 5 s) are marked `!`. Summary line reports `matched / total`, `max |diff|`, mean, and the count over threshold. Exit code `0` means everything is within threshold and matched; `2` means at least one heading drifted or didn't match.
+
+Use it on a freshly-aligned book to confirm the chapter-snap step (§13) is doing its job — `Winter's Heart` should report `max |diff| = 0.00 s` after a clean run, while a book with generic ABS titles will fall back to positional mode and report whatever drift the proportional matcher produced.

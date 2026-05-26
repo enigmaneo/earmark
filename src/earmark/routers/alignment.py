@@ -88,7 +88,7 @@ async def get_sync_map(
     job = result.scalar_one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.status != "complete":
+    if job.status not in ("complete", "complete_with_warnings"):
         raise HTTPException(status_code=409, detail="Job not complete")
 
     sync_map_path = Path(job.sync_map_path)  # type: ignore[arg-type]
