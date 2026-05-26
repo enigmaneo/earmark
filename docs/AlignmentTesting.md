@@ -87,11 +87,14 @@ All downloaded and intermediate files are stored under `.cache/earmark/<item-id>
   audio/             ← downloaded MP3/M4B files (zero-padded index prefix)
   ebook.epub         ← (only when ebook_source=abs; skipped when --ebook-file is used)
   concatenated.wav   ← ephemeral; created before WhisperX, deleted after
+  transcript.json    ← durable; cached WhisperX word list keyed on WHISPER_MODEL
   sync_map.json      ← final output
   .abs_updated_at    ← cache sentinel; compared against live ABS updatedAt on each run
 ```
 
 **Cache invalidation:** if the ABS item's `updatedAt` timestamp has advanced since the last run, all cached files are deleted and re-downloaded. To force a clean run, delete `.cache/earmark/<item-id>/` manually.
+
+**Transcript caching:** the WhisperX step writes `transcript.json` and reuses it on subsequent runs while `WHISPER_MODEL` matches the cached value. Iterating on the matching algorithm (e.g. tuning `min_score`, the chapter-snap rules, or the anchor/interpolation pass) takes **~18 s** on a cache hit instead of the ~50 min cold run, because the audio decoding + whisper transcription + wav2vec2 alignment steps are skipped. Change `WHISPER_MODEL` (or delete `transcript.json` manually) to force a re-transcription.
 
 ---
 
@@ -101,10 +104,10 @@ After WhisperX runs, the pipeline scores the sync map and records any warnings o
 
 | Warning | Meaning |
 |---------|---------|
-| `suspect_first_entry: …` | The first sync-map entry is very short or matches a blurb pattern — usually means front matter leaked through. |
-| `audio_offset_excessive: Xs / Ys` | The first matched paragraph starts more than 5% into the book; potentially missed intro narration. |
+| `suspect_first_entry: …` | The first sync-map entry is very short (non-heading element under 40 chars) or matches a blurb attribution pattern — usually means front matter leaked through. |
 | `docfragment_gap: missing […]` | More than two `DocFragment[N]` spine positions are absent from the final map — the pipeline silently skipped over chapters. |
-| `low_transcript_coverage: N/M paragraphs unmatched` | More than 10% of EPUB paragraphs failed fuzzy-matching against the audio transcript. Usually indicates back-matter pollution or audio missing entire chapters. |
+| `low_transcript_coverage: N/M paragraphs unmatched` | More than 10% of EPUB paragraphs failed fuzzy-matching against the audio transcript (score < `min_score=45`). Usually indicates back-matter pollution or audio missing entire chapters. |
+| `unmatched_chapter_heading: '<text>'` | An EPUB chapter heading (PROLOGUE / EPILOGUE / CHAPTER N) couldn't be matched to any ABS chapter title — so it wasn't snapped to a ground-truth audio start. Inspect the ABS chapter titles for that book and confirm the numbering is conventional. |
 
 To exercise these in tests, run `uv run pytest tests/test_alignment.py -k validate -v`.
 
@@ -114,7 +117,7 @@ To exercise these in tests, run `uv run pytest tests/test_alignment.py -k valida
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `ModuleNotFoundError: No module named 'whisperx'` | `align` extra not installed | `uv pip install -e ".[align]"` |
+| `ModuleNotFoundError: No module named 'whisperx'` | `align` extra not present in the venv | `uv sync --extra align` (note: a plain `uv run` re-syncs against `pyproject.toml` and quietly un-installs anything not declared in the sync target — that's why `uv pip install -e ".[align]"` doesn't stick) |
 | `Distribution torch can't be installed … no wheels for cp314` | Python 3.14 venv | Recreate venv with Python 3.12 or 3.13 |
 | First sync-map entry is praise/blurb text | EPUB front matter not detected as front matter | See `_classify_spine` in `src/earmark/services/alignment.py` — landmarks/title/filename/blurb signals |
 | `low_transcript_coverage` warning on a clean book | Whisper model too small | Try `WHISPER_MODEL=base.en` or `small.en` |
@@ -130,6 +133,23 @@ The sync map preview printed at the end of each run shows the first 10 entries. 
 WhisperX produces **word-level timestamps via wav2vec2 forced alignment**, then paragraphs are matched via `rapidfuzz.fuzz.partial_ratio_alignment`. Expected per-paragraph accuracy: **±1–2 seconds** with `tiny.en`, **±0.5 seconds** with `medium.en` or larger.
 
 When ABS audio splits a chapter that the EPUB keeps whole (or vice versa), the old aeneas pipeline produced hours of offset error; WhisperX handles this naturally because the match is text-based, not positional.
+
+---
+
+## Verifying Chapter Timings (`testing/diff_chapters.py`)
+
+After a job completes, run the chapter diff to compare each EPUB chapter heading in `sync_map.json` against the matching ABS chapter start:
+
+```bash
+uv run python testing/diff_chapters.py --item-id <ABS_ITEM_ID> [--threshold 5.0]
+```
+
+The script picks a matching mode automatically:
+
+- **`title`** — when ABS chapter titles include chapter numbers (`Chapter 12: …`, `Prologue: Snow (Part 1)`), EPUB headings (`CHAPTER 12`, `PROLOGUE`) are looked up by number. *Winter's Heart* runs in this mode and should report `max |diff| = 0.00 s` after a clean run because of the chapter-snap step.
+- **`positional (offset=N)`** — when fewer than half the headings match by title, the script finds the offset that minimises mean drift across the whole book and pairs the *k*-th EPUB heading with the *(N+k)*-th ABS chapter. *Remarkably Bright Creatures* runs in this mode (its ABS titles are generic, `01-68 Remarkably Bright Creatures`); expect a handful of outliers on short distinctive chapter titles.
+
+Output is a per-chapter table with `sync_start`, `abs_start`, signed diff, and the ABS title; rows above `--threshold` are flagged. Exit code `0` means everything within threshold and matched; `2` means at least one chapter drifted or didn't match — handy for use in CI.
 
 ---
 

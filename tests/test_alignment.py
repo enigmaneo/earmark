@@ -16,6 +16,7 @@ from earmark.services.alignment import (
     _classify_spine_item,
     _element_full_xpath,
     _is_blurb_shaped,
+    _match_heading_to_abs_chapter,
     _validate_sync_map,
     recover_orphaned_jobs,
     run_alignment_job,
@@ -783,3 +784,196 @@ async def test_pipeline_low_transcript_coverage_warning(
     body = resp.json()
     assert body["status"] == "complete_with_warnings"
     assert any("low_transcript_coverage" in w for w in body["warnings"])
+
+
+# ── _match_heading_to_abs_chapter ──────────────────────────────────────────────
+
+
+_WOT_CHAPTERS = [
+    {"id": 0, "start": 0.0, "end": 5964.5, "title": "Prologue: Snow (Part 1)"},
+    {"id": 1, "start": 5964.5, "end": 10064.0, "title": "Prologue: Snow (Part 2)"},
+    {"id": 2, "start": 10064.0, "end": 11611.8, "title": "Chapter 1: Leaving the Prophet"},
+    {"id": 3, "start": 11611.8, "end": 13641.1, "title": "Chapter 2: Taken"},
+    {"id": 4, "start": 13641.1, "end": 15320.4, "title": "Chapter 3: Customs"},
+    {"id": 5, "start": 15320.4, "end": 17794.6, "title": "Chapter 4: Offers"},
+    {"id": 6, "start": 17794.6, "end": 19354.4, "title": "Chapter 5: Flags"},
+    {"id": 36, "start": 83400.0, "end": 84000.0, "title": "Epilogue"},
+]
+
+
+def test_match_heading_chapter_arabic() -> None:
+    assert _match_heading_to_abs_chapter("CHAPTER 5", _WOT_CHAPTERS) == 6
+    assert _match_heading_to_abs_chapter("Chapter 1", _WOT_CHAPTERS) == 2
+
+
+def test_match_heading_chapter_roman() -> None:
+    assert _match_heading_to_abs_chapter("Chapter V", _WOT_CHAPTERS) == 6
+    assert _match_heading_to_abs_chapter("CHAPTER IV", _WOT_CHAPTERS) == 5
+
+
+def test_match_heading_prologue_part1() -> None:
+    # Must pick Part 1, not Part 2.
+    assert _match_heading_to_abs_chapter("PROLOGUE", _WOT_CHAPTERS) == 0
+
+
+def test_match_heading_epilogue() -> None:
+    assert _match_heading_to_abs_chapter("Epilogue", _WOT_CHAPTERS) == 7
+
+
+def test_match_heading_no_match_returns_none() -> None:
+    # No "Chapter 99" exists.
+    assert _match_heading_to_abs_chapter("Chapter 99", _WOT_CHAPTERS) is None
+    # Random text isn't a chapter heading at all.
+    assert _match_heading_to_abs_chapter("Acknowledgments", _WOT_CHAPTERS) is None
+
+
+# ── chapter snap end-to-end in the pipeline ────────────────────────────────────
+
+
+async def test_pipeline_snaps_chapter_heading_to_abs_start(
+    client: AsyncClient,
+    jwt_headers: dict[str, str],
+    db_session_factory: async_sessionmaker,  # type: ignore[type-arg]
+    tmp_path: Path,
+) -> None:
+    """Chapter-heading paragraphs are forced to ABS chapter.start times."""
+    paragraphs = [
+        "First narrative paragraph of chapter one with substantive content.",
+        "CHAPTER 2",
+        "Second chapter opens with substantive content for fuzzy matching.",
+    ]
+    index = {
+        "para_000": {
+            "text": paragraphs[0],
+            "ebook_pos": "/body/DocFragment[1]/body/section[1]/p[1]",
+        },
+        "para_001": {
+            "text": paragraphs[1],
+            "ebook_pos": "/body/DocFragment[2]/body/h2[1]",
+        },
+        "para_002": {
+            "text": paragraphs[2],
+            "ebook_pos": "/body/DocFragment[2]/body/section[1]/p[1]",
+        },
+    }
+    metadata = copy.deepcopy(ABS_METADATA)
+    # Insert two body chapters whose starts diverge from where fuzzy match
+    # would put them — the snap should win.
+    metadata["media"]["chapters"] = [
+        {"id": 0, "start": 0.0, "end": 5.0, "title": "Intro"},
+        {"id": 1, "start": 5.0, "end": 500.0, "title": "Chapter 1: Opening"},
+        {"id": 2, "start": 500.0, "end": 1000.0, "title": "Chapter 2: The Middle"},
+    ]
+    words = _words_for(paragraphs)
+
+    resp = await client.post(
+        "/alignment/jobs", json={"abs_item_id": ABS_ITEM_ID}, headers=jwt_headers
+    )
+    job_id = resp.json()["id"]
+
+    await _run_pipeline(
+        job_id, db_session_factory, tmp_path,
+        abs_metadata_override=metadata,
+        paragraphs_override=paragraphs, index_override=index, words_override=words,
+    )
+
+    resp = await client.get(f"/alignment/jobs/{job_id}/sync-map", headers=jwt_headers)
+    entries = resp.json()
+    chapter_2 = next(e for e in entries if e["id"] == "para_001")
+    assert chapter_2["audio_start"] == pytest.approx(500.0)
+    # Heading audio_end is clamped to start+5s.
+    assert chapter_2["audio_end"] == pytest.approx(505.0)
+
+
+async def test_pipeline_interpolates_around_snapped_chapter(
+    client: AsyncClient,
+    jwt_headers: dict[str, str],
+    db_session_factory: async_sessionmaker,  # type: ignore[type-arg]
+    tmp_path: Path,
+) -> None:
+    """Paragraphs flanking a snapped heading interpolate to fall between anchors."""
+    paragraphs = [
+        "Anchor first narrative paragraph with substantive content for matching.",
+        "Filler paragraph one between anchor and chapter two heading content.",
+        "Filler paragraph two between anchor and chapter two heading content.",
+        "CHAPTER 2",
+        "After-chapter narrative paragraph with substantive content for matching.",
+    ]
+    index = {
+        f"para_{i:03d}": {
+            "text": paragraphs[i],
+            "ebook_pos": (
+                "/body/DocFragment[2]/body/h2[1]" if i == 3
+                else f"/body/DocFragment[{1 if i < 3 else 2}]/body/section[1]/p[{i+1}]"
+            ),
+        }
+        for i in range(len(paragraphs))
+    }
+    metadata = copy.deepcopy(ABS_METADATA)
+    metadata["media"]["chapters"] = [
+        {"id": 0, "start": 0.0, "end": 5.0, "title": "Intro"},
+        {"id": 1, "start": 5.0, "end": 600.0, "title": "Chapter 1: Opening"},
+        {"id": 2, "start": 600.0, "end": 1200.0, "title": "Chapter 2: Next"},
+    ]
+    words = _words_for(paragraphs)
+
+    resp = await client.post(
+        "/alignment/jobs", json={"abs_item_id": ABS_ITEM_ID}, headers=jwt_headers
+    )
+    job_id = resp.json()["id"]
+
+    await _run_pipeline(
+        job_id, db_session_factory, tmp_path,
+        abs_metadata_override=metadata,
+        paragraphs_override=paragraphs, index_override=index, words_override=words,
+    )
+
+    resp = await client.get(f"/alignment/jobs/{job_id}/sync-map", headers=jwt_headers)
+    entries = resp.json()
+    by_id = {e["id"]: e for e in entries}
+    # CHAPTER 2 heading is pinned to ABS chapter.start = 600.0
+    assert by_id["para_003"]["audio_start"] == pytest.approx(600.0)
+    # Strict monotonicity across the whole sync map
+    for prev, cur in zip(entries, entries[1:]):
+        assert cur["audio_start"] >= prev["audio_start"]
+
+
+async def test_pipeline_warns_on_unmatched_chapter_heading(
+    client: AsyncClient,
+    jwt_headers: dict[str, str],
+    db_session_factory: async_sessionmaker,  # type: ignore[type-arg]
+    tmp_path: Path,
+) -> None:
+    """A chapter heading with no ABS counterpart emits unmatched_chapter_heading."""
+    paragraphs = [
+        "Opening paragraph that fuzzy-matches the synthesized audio nicely.",
+        "CHAPTER 99",
+        "Trailing paragraph that fuzzy-matches the synthesized audio nicely.",
+    ]
+    index = {
+        "para_000": {"text": paragraphs[0], "ebook_pos": "/body/DocFragment[1]/body/p[1]"},
+        "para_001": {"text": paragraphs[1], "ebook_pos": "/body/DocFragment[2]/body/h2[1]"},
+        "para_002": {"text": paragraphs[2], "ebook_pos": "/body/DocFragment[2]/body/p[2]"},
+    }
+    metadata = copy.deepcopy(ABS_METADATA)
+    metadata["media"]["chapters"] = [
+        {"id": 0, "start": 0.0, "end": 5.0, "title": "Intro"},
+        {"id": 1, "start": 5.0, "end": 600.0, "title": "Chapter 1: Only One"},
+    ]
+    words = _words_for(paragraphs)
+
+    resp = await client.post(
+        "/alignment/jobs", json={"abs_item_id": ABS_ITEM_ID}, headers=jwt_headers
+    )
+    job_id = resp.json()["id"]
+
+    await _run_pipeline(
+        job_id, db_session_factory, tmp_path,
+        abs_metadata_override=metadata,
+        paragraphs_override=paragraphs, index_override=index, words_override=words,
+    )
+
+    resp = await client.get(f"/alignment/jobs/{job_id}", headers=jwt_headers)
+    body = resp.json()
+    assert body["status"] == "complete_with_warnings"
+    assert any("unmatched_chapter_heading" in w for w in body["warnings"])

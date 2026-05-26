@@ -360,6 +360,82 @@ def _normalize_text(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", s.lower())).strip()
 
 
+# EPUB chapter-heading detection ──────────────────────────────────────────────
+
+_EPUB_HEADING_RE = re.compile(r"/h[1-6]\[\d+\]$")
+_CHAPTER_HEADING_RE = re.compile(
+    r"^\s*(prologue|epilogue|chapter\s+\S+)", re.IGNORECASE
+)
+_ROMAN_VALUES = {
+    "i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7,
+    "viii": 8, "ix": 9, "x": 10, "xi": 11, "xii": 12, "xiii": 13,
+    "xiv": 14, "xv": 15, "xvi": 16, "xvii": 17, "xviii": 18, "xix": 19,
+    "xx": 20, "xxi": 21, "xxii": 22, "xxiii": 23, "xxiv": 24, "xxv": 25,
+    "xxvi": 26, "xxvii": 27, "xxviii": 28, "xxix": 29, "xxx": 30,
+    "xxxi": 31, "xxxii": 32, "xxxiii": 33, "xxxiv": 34, "xxxv": 35,
+    "xxxvi": 36, "xxxvii": 37, "xxxviii": 38, "xxxix": 39, "xl": 40,
+}
+
+
+def _parse_chapter_number(token: str) -> int | None:
+    """Parse a chapter number from a token — Arabic (12) or Roman (XII)."""
+    token = token.strip().rstrip(".,:;").lower()
+    if not token:
+        return None
+    if token.isdigit():
+        return int(token)
+    return _ROMAN_VALUES.get(token)
+
+
+def _match_heading_to_abs_chapter(
+    heading_text: str,
+    chapters: list,  # type: ignore[type-arg]
+) -> int | None:
+    """Return the ABS chapters[] index that matches a heading like 'CHAPTER 5'.
+
+    Matching rules (case-insensitive against the ABS chapter title):
+      - 'prologue' → first ABS chapter whose title contains 'prologue' and
+        does NOT look like a "(part 2)" / "(part N>1)" split.
+      - 'epilogue' → first ABS chapter whose title contains 'epilogue'.
+      - 'chapter <n>' → ABS chapter whose title contains 'chapter <n>'
+        (with word boundaries), where <n> can be Arabic or Roman.
+    Returns None when no chapter matches.
+    """
+    text = heading_text.strip().lower()
+    if not text:
+        return None
+
+    if text.startswith("prologue"):
+        for i, ch in enumerate(chapters):
+            t = (ch.get("title") or "").lower()
+            if "prologue" not in t:
+                continue
+            part = re.search(r"part\s+(\d+)", t)
+            if part and int(part.group(1)) > 1:
+                continue
+            return i
+        return None
+
+    if text.startswith("epilogue"):
+        for i, ch in enumerate(chapters):
+            if "epilogue" in (ch.get("title") or "").lower():
+                return i
+        return None
+
+    m = re.match(r"chapter\s+(\S+)", text)
+    if not m:
+        return None
+    n = _parse_chapter_number(m.group(1))
+    if n is None:
+        return None
+
+    pattern = re.compile(rf"\bchapter\s+{n}\b", re.IGNORECASE)
+    for i, ch in enumerate(chapters):
+        if pattern.search(ch.get("title") or ""):
+            return i
+    return None
+
+
 def _build_transcript_index(
     words: list[dict],  # type: ignore[type-arg]
 ) -> tuple[str, list[tuple[int, int, float, float]]]:
@@ -888,26 +964,70 @@ class AlignmentPipeline:
                 "text_snippet": entry["text"],
             })
 
-        # Enforce non-decreasing audio_start across consecutive entries in
-        # EPUB order. Fuzzy matching can pick the wrong occurrence of a
-        # repeated phrase inside a chapter (common in formulaic prose),
-        # producing local backward jumps. Squashing those to the predecessor's
-        # audio_end keeps the sync map usable for read-along (no rewinds when
-        # the reader advances paragraph-by-paragraph) at the cost of a few
-        # entries pointing slightly past their true audio position.
-        regressions = 0
-        prev_end = -1.0
-        for entry in sync_map:
-            if entry["audio_start"] < prev_end:
-                regressions += 1
-                entry["audio_start"] = prev_end
-                if entry["audio_end"] < prev_end:
-                    entry["audio_end"] = prev_end
-            prev_end = entry["audio_end"]
+        # Snap EPUB chapter headings (Prologue / Chapter N / Epilogue) to the
+        # ground-truth ABS chapter starts. Without this, fuzzy matching drift
+        # accumulates across long books (tens of minutes by mid-book on WoT).
+        # The forced timestamps then act as hard anchors for the interpolation
+        # pass below, bounding drift to within a single chapter.
+        unmatched_headings: list[str] = []
+        if chapters:
+            for entry in sync_map:
+                if not _EPUB_HEADING_RE.search(entry["ebook_pos"]):
+                    continue
+                m = _CHAPTER_HEADING_RE.match(entry["text_snippet"])
+                if not m:
+                    continue
+                abs_idx = _match_heading_to_abs_chapter(m.group(1), chapters)
+                if abs_idx is None:
+                    unmatched_headings.append(entry["text_snippet"][:40])
+                    continue
+                ch_start = float(chapters[abs_idx]["start"])
+                ch_end = float(chapters[abs_idx].get("end", ch_start))
+                entry["audio_start"] = ch_start
+                entry["audio_end"] = min(ch_start + 5.0, ch_end)
+
+        # Fuzzy matching can pick the wrong occurrence of a repeated phrase
+        # inside a chapter (common in formulaic prose), producing local
+        # backward jumps. We use the forward running-max as anchors and
+        # linearly interpolate timestamps for regressing runs between
+        # consecutive anchors. This keeps the sync map non-decreasing and
+        # gives each paragraph a distinct estimated timestamp instead of
+        # collapsing whole runs onto a single second.
+        # An entry qualifies as an anchor only if its audio_start is at or
+        # after the previous anchor's audio_end — that guarantees strictly
+        # monotonic timestamps across consecutive anchors, so interpolated
+        # spans always have non-negative width.
+        anchors: list[int] = []
+        last_end = -1.0
+        for i, entry in enumerate(sync_map):
+            if entry["audio_start"] >= last_end:
+                anchors.append(i)
+                last_end = entry["audio_end"]
+
+        regressions = len(sync_map) - len(anchors)
+        for a, b in zip(anchors, anchors[1:]):
+            if b == a + 1:
+                continue
+            t0 = sync_map[a]["audio_end"]
+            t1 = sync_map[b]["audio_start"]
+            span = max(0.0, t1 - t0)
+            count = b - a
+            for k in range(1, count):
+                frac = k / count
+                sync_map[a + k]["audio_start"] = t0 + span * frac
+                sync_map[a + k]["audio_end"] = t0 + span * ((k + 0.5) / count)
+        # Trailing non-anchors: clamp to last anchor's end.
+        if anchors and anchors[-1] < len(sync_map) - 1:
+            last_a = anchors[-1]
+            tail_t = sync_map[last_a]["audio_end"]
+            for i in range(last_a + 1, len(sync_map)):
+                sync_map[i]["audio_start"] = tail_t
+                sync_map[i]["audio_end"] = tail_t
+
         if regressions:
             logger.info(
-                "Squashed %d backward timestamp regressions out of %d entries",
-                regressions, len(sync_map),
+                "Interpolated %d regressing entries between %d anchors",
+                regressions, len(anchors),
             )
 
         sync_map_path = cache_dir / "sync_map.json"
@@ -927,6 +1047,8 @@ class AlignmentPipeline:
             warnings.append(
                 f"low_transcript_coverage: {unmatched}/{para_count} paragraphs unmatched"
             )
+        for h in unmatched_headings:
+            warnings.append(f"unmatched_chapter_heading: {h!r}")
 
         final_status = "complete_with_warnings" if warnings else "complete"
         if warnings:
