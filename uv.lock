@@ -369,6 +369,7 @@ dependencies = [
     { name = "beautifulsoup4" },
     { name = "ebooklib" },
     { name = "fastapi", extra = ["standard"] },
+    { name = "faster-whisper" },
     { name = "ffmpeg-python" },
     { name = "httpx" },
     { name = "numpy" },
@@ -382,9 +383,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-align = [
-    { name = "faster-whisper" },
-]
 dev = [
     { name = "mypy" },
     { name = "pytest" },
@@ -407,7 +405,7 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12" },
     { name = "ebooklib", specifier = ">=0.18" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115" },
-    { name = "faster-whisper", marker = "extra == 'align'", specifier = ">=1.0" },
+    { name = "faster-whisper", specifier = ">=1.0" },
     { name = "ffmpeg-python", specifier = ">=0.2" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
@@ -423,7 +421,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
 ]
-provides-extras = ["dev", "align"]
+provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [

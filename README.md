@@ -35,8 +35,7 @@ Requires Python 3.12 or 3.13 (PyTorch has no Python 3.14 wheels yet) and [uv](ht
 ```bash
 uv python install 3.13               # if 3.13 isn't already installed
 uv venv --python 3.13                # only needed if your default uv venv is on a newer Python
-uv sync --extra align                # faster-whisper + torch — required for alignment jobs
-                                     # (use plain `uv sync` if you only need progress sync)
+uv sync                              # installs all deps including faster-whisper for alignment
 uv run earmark-reset                 # create a clean empty database (fresh install)
 uv run earmark-seed                  # alternatively: create and seed with sample data
 uv run fastapi dev src/earmark/main.py --reload-dir src/earmark   # dev server on :8000

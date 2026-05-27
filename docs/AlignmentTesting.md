@@ -7,12 +7,12 @@ This guide explains how to set up and manually test the audiobook-ebook alignmen
 ### 1. Install system and Python dependencies
 
 ```bash
-uv sync --extra align            # core deps + faster-whisper + torch (alignment-only extra; needs Python 3.12 or 3.13)
+uv sync                          # installs faster-whisper as a core dep (needs Python 3.12 or 3.13)
 brew install ffmpeg              # macOS — required for audio decoding
 # apt-get install ffmpeg         # Debian/Ubuntu equivalent
 ```
 
-The `align` extra pulls in PyTorch, which currently has wheels only for Python ≤3.13. `pyproject.toml` pins `requires-python = ">=3.12,<3.14"` to keep `uv sync` honest. If you previously created the venv on a newer Python, recreate it: `rm -rf .venv && uv venv --python 3.13`.
+`faster-whisper`'s `ctranslate2` / `onnxruntime` deps currently ship wheels only for Python ≤3.13. `pyproject.toml` pins `requires-python = ">=3.12,<3.14"` to keep `uv sync` honest. If you previously created the venv on a newer Python, recreate it: `rm -rf .venv && uv venv --python 3.13`.
 
 ### 2. Configure environment
 
@@ -143,7 +143,7 @@ To exercise these in tests, run `uv run pytest tests/test_alignment.py -k valida
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `ModuleNotFoundError: No module named 'faster_whisper'` | `align` extra not present in the venv | `uv sync --extra align` (note: a plain `uv run` re-syncs against `pyproject.toml` and quietly un-installs anything not declared in the sync target — that's why `uv pip install -e ".[align]"` doesn't stick) |
+| `ModuleNotFoundError: No module named 'faster_whisper'` | venv predates faster-whisper becoming a core dep | `uv sync` to install/refresh deps |
 | `Distribution torch can't be installed … no wheels for cp314` | Python 3.14 venv | Recreate venv with Python 3.12 or 3.13 |
 | First sync-map entry is praise/blurb text | EPUB front matter not detected as front matter | See `_classify_spine` in `src/earmark/services/alignment.py` — landmarks/title/filename/blurb signals |
 | `low_transcript_coverage` warning on a clean book | Whisper model too small | Try `WHISPER_MODEL=base.en` or `small.en` |

@@ -615,7 +615,7 @@ The array is ordered by `audio_start` (ascending), which matches EPUB reading or
 | `rapidfuzz` | Monotonic fuzzy substring matching of paragraphs to transcript |
 | `ffmpeg-python` | Audio concatenation and format normalization |
 
-The `faster-whisper` dependency lives behind the `align` optional extra (`pip install -e ".[align]"`). It pulls in PyTorch, which currently ships wheels only for Python ≤3.13.
+`faster-whisper` is a core dependency. Its `ctranslate2` / `onnxruntime` transitive deps currently ship wheels only for Python ≤3.13, which is why `pyproject.toml` pins `requires-python<3.14`.
 
 **System dependencies:**
 
