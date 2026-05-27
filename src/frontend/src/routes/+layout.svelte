@@ -16,15 +16,20 @@
 </Toast.Group>
 <div class="flex h-full flex-col">
 	<AppBar>
-		<AppBar.Lead>
+		<div class="flex w-full items-center justify-between">
 			<strong class="text-xl">earmark</strong>
-		</AppBar.Lead>
+			{#if data.user}
+				<div class="flex items-center gap-3">
+					<span class="text-surface-600-400 text-sm">{data.user.email}</span>
+					<a href="/logout" class="btn btn-sm variant-soft">Sign out</a>
+				</div>
+			{/if}
+		</div>
 		{#if data.user}
-			<AppBar.Trail>
+			<div class="flex gap-2">
 				<a href="/mappings" class="btn btn-sm variant-ghost">Mappings</a>
-				<span class="text-surface-600-400 text-sm">{data.user.email}</span>
-				<a href="/logout" class="btn btn-sm variant-soft">Sign out</a>
-			</AppBar.Trail>
+				<a href="/progress" class="btn btn-sm variant-ghost">Progress</a>
+			</div>
 		{/if}
 	</AppBar>
 	<main class="flex-1">

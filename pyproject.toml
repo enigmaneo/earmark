@@ -39,6 +39,7 @@ align = [
 
 [project.scripts]
 earmark-seed = "earmark.seed:main"
+earmark-reset = "earmark.reset_db:main"
 
 [build-system]
 requires = ["hatchling"]

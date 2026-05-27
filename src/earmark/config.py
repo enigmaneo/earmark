@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     log_pretty: bool = False
+    log_requests: bool = False
 
 
 settings = Settings()
