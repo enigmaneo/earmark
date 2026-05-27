@@ -1,6 +1,8 @@
 import asyncio
+import gc
 import json
 import logging
+import math
 import re
 import shutil
 import tempfile
@@ -319,6 +321,22 @@ def _ffmpeg_concat_sync(audio_files: list[Path], output_path: Path) -> None:
         concat_list.unlink(missing_ok=True)
 
 
+def _probe_duration_sync(audio_path: Path) -> float:
+    info = ffmpeg.probe(str(audio_path))
+    return float(info["format"]["duration"])
+
+
+def _extract_chunk_sync(
+    src: Path, start_s: float, duration_s: float, out_path: Path
+) -> None:
+    (
+        ffmpeg.input(str(src), ss=start_s, t=duration_s)
+        .output(str(out_path), ar=16000, ac=1, acodec="pcm_s16le")
+        .overwrite_output()
+        .run(quiet=True)
+    )
+
+
 def _transcribe_audio_sync(
     audio_path: Path,
     model_name: str,
@@ -326,44 +344,89 @@ def _transcribe_audio_sync(
     compute_type: str,
     batch_size: int,
     language: str,
+    chunk_seconds: int,
     progress_cb_transcribe: object = None,  # Callable[[float], None] | None
     progress_cb_align: object = None,  # Callable[[float], None] | None
 ) -> list[dict]:  # type: ignore[type-arg]
-    """Run WhisperX and return word-level timestamps as a flat list.
+    """Run WhisperX in chunks and return word-level timestamps.
 
-    Each entry: {"word": str, "start": float, "end": float} (absolute audio seconds).
-    The two callbacks are each invoked with a float in 0..100 once per
-    processed segment of their respective stage. WhisperX's own
-    ``combined_progress`` flag only affects its print output; the callback
-    always receives the per-stage percentage, so we route the two stages to
-    separate callbacks here.
+    Audio is split into ``chunk_seconds`` windows via ffmpeg so the full audio
+    array is never held in memory. Transcription runs over all chunks first;
+    the Whisper model is then released before the alignment model is loaded,
+    so peak RAM is one model + one chunk's audio rather than both models +
+    the full audiobook.
     """
     import whisperx
 
-    model = whisperx.load_model(model_name, device, compute_type=compute_type, language=language)
-    audio = whisperx.load_audio(str(audio_path))
-    result = model.transcribe(
-        audio, batch_size=batch_size, language=language,
-        progress_callback=progress_cb_transcribe,
-    )
+    total_duration = _probe_duration_sync(audio_path)
+    n_chunks = max(1, math.ceil(total_duration / chunk_seconds))
 
-    align_model, metadata = whisperx.load_align_model(language_code=language, device=device)
-    aligned = whisperx.align(
-        result["segments"], align_model, metadata, audio, device,
-        return_char_alignments=False,
-        progress_callback=progress_cb_align,
-    )
+    def _wrap_cb(cb: object, chunk_idx: int) -> object:
+        if cb is None:
+            return None
 
-    words: list[dict] = []  # type: ignore[type-arg]
-    for seg in aligned.get("segments", []):
-        for w in seg.get("words", []):
-            if "start" in w and "end" in w and w.get("word"):
-                words.append({
-                    "word": str(w["word"]).strip(),
-                    "start": float(w["start"]),
-                    "end": float(w["end"]),
-                })
-    return words
+        def _inner(percent: float) -> None:
+            overall = (chunk_idx + max(0.0, min(100.0, float(percent))) / 100.0) / n_chunks * 100.0
+            cb(overall)  # type: ignore[operator]
+
+        return _inner
+
+    chunk_dir = Path(tempfile.mkdtemp(prefix="earmark_chunk_"))
+    try:
+        # Pass 1: transcribe all chunks with the Whisper model loaded once.
+        model = whisperx.load_model(
+            model_name, device, compute_type=compute_type, language=language
+        )
+        chunk_segments: list[tuple[float, list[dict]]] = []  # type: ignore[type-arg]
+        try:
+            for i in range(n_chunks):
+                start = i * chunk_seconds
+                dur = min(float(chunk_seconds), total_duration - start)
+                chunk_path = chunk_dir / f"chunk_{i:04d}.wav"
+                _extract_chunk_sync(audio_path, start, dur, chunk_path)
+                audio = whisperx.load_audio(str(chunk_path))
+                result = model.transcribe(
+                    audio, batch_size=batch_size, language=language,
+                    progress_callback=_wrap_cb(progress_cb_transcribe, i),
+                )
+                chunk_segments.append((start, result["segments"]))
+                del audio, result
+                gc.collect()
+        finally:
+            del model
+            gc.collect()
+
+        # Pass 2: align each chunk against the alignment model.
+        align_model, metadata = whisperx.load_align_model(
+            language_code=language, device=device,
+        )
+        words: list[dict] = []  # type: ignore[type-arg]
+        try:
+            for i, (start, segments) in enumerate(chunk_segments):
+                chunk_path = chunk_dir / f"chunk_{i:04d}.wav"
+                audio = whisperx.load_audio(str(chunk_path))
+                aligned = whisperx.align(
+                    segments, align_model, metadata, audio, device,
+                    return_char_alignments=False,
+                    progress_callback=_wrap_cb(progress_cb_align, i),
+                )
+                for seg in aligned.get("segments", []):
+                    for w in seg.get("words", []):
+                        if "start" in w and "end" in w and w.get("word"):
+                            words.append({
+                                "word": str(w["word"]).strip(),
+                                "start": float(w["start"]) + start,
+                                "end": float(w["end"]) + start,
+                            })
+                del audio, aligned
+                gc.collect()
+        finally:
+            del align_model
+            gc.collect()
+
+        return words
+    finally:
+        shutil.rmtree(chunk_dir, ignore_errors=True)
 
 
 def _normalize_text(s: str) -> str:
@@ -1019,6 +1082,7 @@ class AlignmentPipeline:
                 settings.whisper_compute_type,
                 settings.whisper_batch_size,
                 settings.whisper_language,
+                settings.whisper_chunk_seconds,
                 _make_cb("transcribe"),
                 _make_cb("align"),
             )

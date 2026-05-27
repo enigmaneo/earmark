@@ -26,7 +26,8 @@ class Settings(BaseSettings):
     whisper_model: str = "tiny.en"  # tiny.en | base.en | small.en | medium.en | large-v3
     whisper_device: str = "cpu"  # cpu | cuda | mps
     whisper_compute_type: str = "int8"  # int8 | float16 | float32
-    whisper_batch_size: int = 16
+    whisper_batch_size: int = 4
+    whisper_chunk_seconds: int = 600
     whisper_language: str = "en"
 
     timezone: str = "America/New_York"

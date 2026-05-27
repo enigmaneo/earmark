@@ -142,7 +142,7 @@ To exercise these in tests, run `uv run pytest tests/test_alignment.py -k valida
 | `Distribution torch can't be installed … no wheels for cp314` | Python 3.14 venv | Recreate venv with Python 3.12 or 3.13 |
 | First sync-map entry is praise/blurb text | EPUB front matter not detected as front matter | See `_classify_spine` in `src/earmark/services/alignment.py` — landmarks/title/filename/blurb signals |
 | `low_transcript_coverage` warning on a clean book | Whisper model too small | Try `WHISPER_MODEL=base.en` or `small.en` |
-| Run times out / OOM | Audio too long for available RAM | Use `int8` compute_type and `tiny.en` model |
+| Run times out / OOM | Audio too long for available RAM | Use `int8` compute_type and `tiny.en` model; lower `WHISPER_CHUNK_SECONDS` (e.g. 300) and `WHISPER_BATCH_SIZE` (e.g. 1) |
 | ffmpeg `No such file or directory` in concat list | Relative paths in concat list | Fixed in code (uses absolute paths) |
 
 ---
