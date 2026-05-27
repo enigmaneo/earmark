@@ -7,12 +7,12 @@ This guide explains how to set up and manually test the audiobook-ebook alignmen
 ### 1. Install system and Python dependencies
 
 ```bash
-uv sync --extra align            # core deps + WhisperX (alignment-only extra; needs Python 3.12 or 3.13)
+uv sync --extra align            # core deps + faster-whisper + torch (alignment-only extra; needs Python 3.12 or 3.13)
 brew install ffmpeg              # macOS — required for audio decoding
 # apt-get install ffmpeg         # Debian/Ubuntu equivalent
 ```
 
-WhisperX pulls in PyTorch, which currently has wheels only for Python ≤3.13. `pyproject.toml` pins `requires-python = ">=3.12,<3.14"` to keep `uv sync` honest. If you previously created the venv on a newer Python, recreate it: `rm -rf .venv && uv venv --python 3.13`.
+The `align` extra pulls in PyTorch, which currently has wheels only for Python ≤3.13. `pyproject.toml` pins `requires-python = ">=3.12,<3.14"` to keep `uv sync` honest. If you previously created the venv on a newer Python, recreate it: `rm -rf .venv && uv venv --python 3.13`.
 
 ### 2. Configure environment
 
@@ -23,13 +23,14 @@ AUDIOBOOKSHELF_URL=https://your-abs-server
 AUDIOBOOKSHELF_API_KEY=your-api-key
 ```
 
-Tuning the WhisperX run (defaults in parentheses):
+Tuning the transcription run (defaults in parentheses):
 
 ```
 WHISPER_MODEL=tiny.en            # (tiny.en) other choices: base.en, small.en, medium.en, large-v3
 WHISPER_DEVICE=cpu               # (cpu) — or "cuda" if you have a CUDA GPU, "mps" experimentally
 WHISPER_COMPUTE_TYPE=int8        # (int8) — "float16" on GPU
-WHISPER_BATCH_SIZE=16            # (16)
+WHISPER_CPU_THREADS=4            # (4) — set to host CPU count for best throughput
+WHISPER_CHUNK_SECONDS=600        # (600) — lower on low-RAM hosts to cut peak RAM
 WHISPER_LANGUAGE=en              # (en)
 LOG_LEVEL=DEBUG                  # see stage-by-stage logging
 ```
@@ -66,7 +67,7 @@ Pipeline progress:
   [17:07:06] Pending
   [17:07:08] Parsing EPUB and extracting paragraphs
              Paragraphs extracted: 3,434
-  [17:07:24] Running WhisperX transcription + alignment
+  [17:07:24] Running Whisper transcription
   [17:07:24] progress: 30%
   [17:09:13] progress: 32%
   [17:11:42] progress: 35%
@@ -81,11 +82,11 @@ Pipeline progress:
 Completed in 1h 16m
 ```
 
-Transcribe contributes job progress **30..57**; align contributes **57..85**. The drain coroutine pushes a DB write whenever the integer mapping advances, and a heartbeat coroutine auto-nudges progress every 30 s if WhisperX has been silent in the meantime (so the bar never sits dead for more than half a minute). The server log also receives an `INFO` line every 60 s:
+Transcription contributes job progress **30..85**. The drain coroutine pushes a DB write whenever the integer mapping advances, and a heartbeat coroutine auto-nudges progress every 30 s if the model has been silent in the meantime (so the bar never sits dead for more than half a minute). The server log also receives an `INFO` line every 60 s:
 
 ```
-INFO  alignment still running: elapsed=12m04s progress=39 stage=transcribe
-INFO  alignment still running: elapsed=13m05s progress=40 stage=transcribe
+INFO  alignment still running: elapsed=12m04s progress=39
+INFO  alignment still running: elapsed=13m05s progress=40
 …
 ```
 
@@ -107,21 +108,25 @@ All downloaded and intermediate files are stored under `.cache/earmark/<item-id>
 .cache/earmark/<item-id>/
   audio/             ← downloaded MP3/M4B files (zero-padded index prefix)
   ebook.epub         ← (only when ebook_source=abs; skipped when --ebook-file is used)
-  concatenated.wav   ← ephemeral; created before WhisperX, deleted after
-  transcript.json    ← durable; cached WhisperX word list keyed on WHISPER_MODEL
+  chunks/<model>_<chunk_seconds>_<lang>/
+    0000.json        ← per-chunk word lists; restart-resumable; cleaned up on success
+    0001.json
+  transcript.json    ← durable; consolidated word list keyed on WHISPER_MODEL
   sync_map.json      ← final output
   .abs_updated_at    ← cache sentinel; compared against live ABS updatedAt on each run
 ```
 
 **Cache invalidation:** if the ABS item's `updatedAt` timestamp has advanced since the last run, all cached files are deleted and re-downloaded. To force a clean run, delete `.cache/earmark/<item-id>/` manually.
 
-**Transcript caching:** the WhisperX step writes `transcript.json` and reuses it on subsequent runs while `WHISPER_MODEL` matches the cached value. Iterating on the matching algorithm (e.g. tuning `min_score`, the chapter-snap rules, or the anchor/interpolation pass) takes **~18 s** on a cache hit instead of the ~50 min cold run, because the audio decoding + whisper transcription + wav2vec2 alignment steps are skipped. Change `WHISPER_MODEL` (or delete `transcript.json` manually) to force a re-transcription.
+**Transcript caching:** the transcribe step writes `transcript.json` and reuses it on subsequent runs while `WHISPER_MODEL` matches the cached value. Iterating on the matching algorithm (e.g. tuning `min_score`, the chapter-snap rules, or the anchor/interpolation pass) takes **~18 s** on a cache hit instead of the cold run, because the audio decoding + transcription steps are skipped. Change `WHISPER_MODEL` (or delete `transcript.json` manually) to force a re-transcription.
+
+**Per-chunk caching:** during a cold run, each ~`WHISPER_CHUNK_SECONDS`-long chunk's word list is written to `chunks/<model>_<chunk_seconds>_<language>/<idx>.json` as soon as it finishes. If the container restarts mid-run (deploy, OOM, NAS reboot), the next run reuses the already-completed chunks and resumes from where it died. The directory is removed once `transcript.json` is consolidated.
 
 ---
 
 ## Validation Warnings
 
-After WhisperX runs, the pipeline scores the sync map and records any warnings on `AlignmentJob.warnings`. A job with warnings finishes in status `complete_with_warnings` (the sync map is still readable through the API). Warning strings:
+After transcription runs, the pipeline scores the sync map and records any warnings on `AlignmentJob.warnings`. A job with warnings finishes in status `complete_with_warnings` (the sync map is still readable through the API). Warning strings:
 
 | Warning | Meaning |
 |---------|---------|
@@ -138,11 +143,11 @@ To exercise these in tests, run `uv run pytest tests/test_alignment.py -k valida
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `ModuleNotFoundError: No module named 'whisperx'` | `align` extra not present in the venv | `uv sync --extra align` (note: a plain `uv run` re-syncs against `pyproject.toml` and quietly un-installs anything not declared in the sync target — that's why `uv pip install -e ".[align]"` doesn't stick) |
+| `ModuleNotFoundError: No module named 'faster_whisper'` | `align` extra not present in the venv | `uv sync --extra align` (note: a plain `uv run` re-syncs against `pyproject.toml` and quietly un-installs anything not declared in the sync target — that's why `uv pip install -e ".[align]"` doesn't stick) |
 | `Distribution torch can't be installed … no wheels for cp314` | Python 3.14 venv | Recreate venv with Python 3.12 or 3.13 |
 | First sync-map entry is praise/blurb text | EPUB front matter not detected as front matter | See `_classify_spine` in `src/earmark/services/alignment.py` — landmarks/title/filename/blurb signals |
 | `low_transcript_coverage` warning on a clean book | Whisper model too small | Try `WHISPER_MODEL=base.en` or `small.en` |
-| Run times out / OOM | Audio too long for available RAM | Use `int8` compute_type and `tiny.en` model; lower `WHISPER_CHUNK_SECONDS` (e.g. 300) and `WHISPER_BATCH_SIZE` (e.g. 1) |
+| Run times out / OOM | Audio too long for available RAM | Use `int8` compute_type and `tiny.en` model; lower `WHISPER_CHUNK_SECONDS` (e.g. 300) |
 | ffmpeg `No such file or directory` in concat list | Relative paths in concat list | Fixed in code (uses absolute paths) |
 
 ---
@@ -151,9 +156,9 @@ To exercise these in tests, run `uv run pytest tests/test_alignment.py -k valida
 
 The sync map preview printed at the end of each run shows the first 10 entries. To verify against a known audiobook, listen to the audio and note actual start times of the first paragraphs, then compare.
 
-WhisperX produces **word-level timestamps via wav2vec2 forced alignment**, then paragraphs are matched via `rapidfuzz.fuzz.partial_ratio_alignment`. Expected per-paragraph accuracy: **±1–2 seconds** with `tiny.en`, **±0.5 seconds** with `medium.en` or larger.
+Transcription uses **faster-whisper directly** with `word_timestamps=True`, `beam_size=1`, `best_of=1`, and `vad_filter=True` — no wav2vec2 forced-alignment pass. Whisper's own word timestamps are coarser (≈±200 ms per word vs. ≈±50 ms for wav2vec2), but the downstream paragraph matcher (`rapidfuzz.fuzz.partial_ratio_alignment` at `min_score=45`) is fuzzy enough that this rarely shifts a paragraph boundary by more than a second. Expected per-paragraph accuracy: **±1–2 seconds** with `tiny.en`, **±1 second** with `base.en` or larger.
 
-When ABS audio splits a chapter that the EPUB keeps whole (or vice versa), the old aeneas pipeline produced hours of offset error; WhisperX handles this naturally because the match is text-based, not positional.
+When ABS audio splits a chapter that the EPUB keeps whole (or vice versa), the old aeneas pipeline produced hours of offset error; the current text-based matcher handles this naturally because the match is content-driven, not positional.
 
 ---
 

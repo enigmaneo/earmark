@@ -30,10 +30,11 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
 ]
-# WhisperX pulls in torch, which currently has wheels only for Python ≤3.13.
-# Install with: uv pip install -e ".[align]"  (requires Python 3.12 or 3.13).
+# faster-whisper pulls in ctranslate2 / onnxruntime, which currently ship wheels
+# only for Python ≤3.13. Install with: uv pip install -e ".[align]"
+# (requires Python 3.12 or 3.13).
 align = [
-    "whisperx>=3.1",
+    "faster-whisper>=1.0",
 ]
 
 [project.scripts]

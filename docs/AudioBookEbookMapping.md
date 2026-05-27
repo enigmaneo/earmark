@@ -14,7 +14,7 @@ This document describes the pipeline that force-aligns an audiobook from Audiobo
 8. [The Core Mapping Mechanism](#8-the-core-mapping-mechanism)
 9. [Multi-File Audio Handling](#9-multi-file-audio-handling)
 10. [Audio Format Handling](#10-audio-format-handling)
-11. [Audio Transcription (WhisperX)](#11-audio-transcription-whisperx)
+11. [Audio Transcription (faster-whisper)](#11-audio-transcription-faster-whisper)
 12. [Paragraph Matching (rapidfuzz)](#12-paragraph-matching-rapidfuzz)
 13. [Final Assembly](#13-final-assembly)
 14. [Output Schema](#14-output-schema)
@@ -39,7 +39,7 @@ ABS API
         └─► download audio files → local cache
               └─► download ebook → local cache
                     └─► parse EPUB, classify spine, extract bodymatter paragraphs
-                          └─► concatenate audio → WhisperX transcribe (word-level timestamps)
+                          └─► chunk audio (10-min WAV slices) → faster-whisper transcribe (word-level timestamps)
                                 └─► fuzzy-match EPUB paragraphs to transcript (rapidfuzz)
                                       └─► validate + write sync_map.json (warnings → status)
 ```
@@ -304,17 +304,21 @@ All downloaded and intermediate files live under `.cache/earmark/` within the pr
     audio/
       001_Chapter01.mp3    ← zero-padded index prefix preserves playback order
       002_Chapter02.mp3
-    concatenated.wav       ← ephemeral; fed to WhisperX, deleted after assembly
-    transcript.json        ← durable; cached WhisperX word-level output (see below)
+    chunks/<model>_<chunk_seconds>_<lang>/
+      0000.json            ← per-chunk word lists; restart-resumable; deleted after transcript.json is written
+      0001.json
+    transcript.json        ← durable; cached consolidated word list (see below)
     ebook.epub
     sync_map.json          ← durable output artifact
 ```
 
 **Cache invalidation:** On pipeline start, `metadata.json` is read and its `updatedAt` value is compared against the live ABS API. If ABS is newer, all cached files for that item are deleted and re-downloaded.
 
-`concatenated.wav` is regenerated each run and removed after the pipeline completes.
+Per-chunk WAV slices are extracted to a process-local tempdir for transcription and removed as each chunk completes. There is no concatenated WAV — the previous pipeline produced a `concatenated.wav` at 16 kHz mono; the chunked pipeline never materializes the full track on disk.
 
-`transcript.json` is the cached WhisperX output (word list + the `whisper_model` it was produced with). Subsequent runs skip the multi-minute transcription step when this file exists and the cached model name matches `settings.whisper_model`. Delete it manually to force a re-transcription (e.g. after changing to a larger model).
+`transcript.json` is the consolidated transcription output (word list + the `whisper_model` it was produced with). Subsequent runs skip the multi-minute transcription step when this file exists and the cached model name matches `settings.whisper_model`. Delete it manually to force a re-transcription (e.g. after changing to a larger model).
+
+The `chunks/` directory holds per-chunk word lists keyed on `(model, chunk_seconds, language)`. If a job dies mid-transcription (container restart, OOM, NAS reboot), the next run reuses already-completed chunks and resumes from where it died. The directory is removed once `transcript.json` is finalized.
 
 `sync_map.json` is the final artifact. Its path is written to `alignment_jobs.sync_map_path`.
 
@@ -402,7 +406,7 @@ This format is critical: KOReader's CRE engine navigates positions using the rea
 
 This is the critical design invariant: **the sequential paragraph ID is the sole join key between the audio timeline and the EPUB position.**
 
-EPUB paragraphs are matched to audio time ranges by fuzzy-matching paragraph text against the WhisperX word-level transcript. The matcher uses **proportional positioning** — paragraph `i` of `n` is searched in a window centered on the transcript character offset `total * i/n`:
+EPUB paragraphs are matched to audio time ranges by fuzzy-matching paragraph text against the `faster-whisper` word-level transcript. The matcher uses **proportional positioning** — paragraph `i` of `n` is searched in a window centered on the transcript character offset `total * i/n`:
 
 ```
 EPUB spine (reading order)
@@ -413,7 +417,7 @@ Extract paragraphs (bodymatter only) → assign IDs in order
   para_001  "it was the worst of times..."    ebook_pos = /body/DocFragment[1]/body/section[1]/p[2]
   │
   ▼
-WhisperX transcribes the audio → word-level timestamps
+faster-whisper transcribes the audio → word-level timestamps
   [
     {"word": "it", "start": 0.10, "end": 0.18},
     {"word": "was", "start": 0.19, "end": 0.30},
@@ -438,17 +442,9 @@ as None and dropped.
 
 ## 9. Multi-File Audio Handling
 
-Audiobookshelf commonly stores audiobooks as a folder of MP3 files — one per chapter. WhisperX expects a single audio file. The pipeline concatenates files in `index` order with ffmpeg:
+Audiobookshelf commonly stores audiobooks as a folder of MP3 files — one per chapter. The transcription stage processes the audio in fixed-length chunks (default 600 s), so the files don't need to be physically concatenated. For each chunk index *i*, ffmpeg extracts a slice spanning `[i * chunk_seconds, (i+1) * chunk_seconds)` from the underlying audio (sorted by `audioFiles[].index`) into a temporary 16 kHz mono WAV that is fed to `faster_whisper`. The slice file is deleted as soon as that chunk completes.
 
-1. Sort `audioFiles` by their `index` field (ascending).
-2. Write an ffmpeg concat list of absolute paths.
-3. Concatenate and normalize:
-   ```bash
-   ffmpeg -f concat -safe 0 -i filelist.txt -ar 16000 -ac 1 concatenated.wav
-   ```
-4. Pass `concatenated.wav` to WhisperX.
-
-If the audio is already a single `.mp3`, `.m4b`, or `.m4a` file, concatenation is skipped and the original file is fed in directly — WhisperX handles those formats via its internal ffmpeg call.
+If the audio is already a single `.mp3`, `.m4b`, or `.m4a` file, ffmpeg operates on it directly with the appropriate `-ss` / `-t` flags; multi-file inputs are handled via an ffmpeg concat list driving the same `-ss` / `-t` slice. Peak audio memory is one chunk (~19 MB at 600 s) rather than the full audiobook.
 
 ---
 
@@ -456,41 +452,45 @@ If the audio is already a single `.mp3`, `.m4b`, or `.m4a` file, concatenation i
 
 | Format | Notes |
 |--------|-------|
-| `.mp3` | Single or multi-file. Multi-file → concatenate. Single → pass directly. |
-| `.m4b` | Single AAC audiobook container. Passed directly. |
+| `.mp3` | Single or multi-file. ffmpeg slices each chunk on demand. |
+| `.m4b` | Single AAC audiobook container. Sliced via ffmpeg. |
 | `.m4a` | Single AAC. Same as `.m4b`. |
-| `.flac` / `.ogg` / `.opus` / `.aac` | Concatenated to WAV at 16 kHz mono via ffmpeg before WhisperX. |
+| `.flac` / `.ogg` / `.opus` / `.aac` | Same chunked ffmpeg slicing path; each chunk emitted as 16 kHz mono PCM WAV. |
 
-`-ar 16000 -ac 1` (16 kHz mono PCM) is what WhisperX expects internally — pre-normalizing avoids codec edge cases and keeps memory predictable across formats.
+`-ar 16000 -ac 1` (16 kHz mono PCM) is what `faster-whisper` expects internally — emitting that format per-chunk avoids codec edge cases and keeps memory predictable across formats.
 
 ---
 
-## 11. Audio Transcription (WhisperX)
+## 11. Audio Transcription (faster-whisper)
 
-WhisperX transcribes the concatenated audio and produces **word-level timestamps** via wav2vec2 forced alignment. It replaces the previous aeneas + chapter-rescaling pipeline. The key win: alignment is now text-based, not positional — front matter, back matter, intro tracks, and split chapters no longer cascade errors through the rest of the book.
+The pipeline uses **`faster-whisper`** directly to produce word-level timestamps from Whisper's own decoder (no wav2vec2 forced-alignment pass). It replaces the previous aeneas + chapter-rescaling pipeline. The key wins: alignment is text-based (not positional) — front matter, back matter, intro tracks, and split chapters no longer cascade errors through the rest of the book — and the chunked + cached design survives container restarts mid-job with bounded retry cost.
 
 ```python
-import whisperx
+from faster_whisper import WhisperModel
 
-model = whisperx.load_model(model_name, device, compute_type=compute_type, language=lang)
-audio = whisperx.load_audio(str(audio_path))
-result = model.transcribe(audio, batch_size=batch_size, language=lang)
+model = WhisperModel(model_name, device=device, compute_type=compute_type,
+                     cpu_threads=cpu_threads)
 
-align_model, metadata = whisperx.load_align_model(language_code=lang, device=device)
-aligned = whisperx.align(
-    result["segments"], align_model, metadata, audio, device,
-    return_char_alignments=False,
+# For each ffmpeg-extracted chunk WAV:
+segments, _info = model.transcribe(
+    str(chunk_path),
+    beam_size=1, best_of=1,        # greedy decode — primary speed lever
+    language=language,
+    word_timestamps=True,
+    vad_filter=True,
 )
-
 words = [
-    {"word": w["word"], "start": float(w["start"]), "end": float(w["end"])}
-    for seg in aligned["segments"]
-    for w in seg.get("words", [])
-    if "start" in w and "end" in w
+    {"word": w.word.strip(),
+     "start": float(w.start) + chunk_offset,
+     "end":   float(w.end)   + chunk_offset}
+    for seg in segments for w in (seg.words or [])
+    if w.start is not None and w.end is not None
 ]
 ```
 
-Word timestamps are **absolute** seconds in the original audio. No pre-trim is needed; intros and credits just don't get matched to any EPUB paragraph.
+Word timestamps are **absolute** seconds in the original audio (per-chunk offsets are added on emit). No pre-trim is needed; intros and credits just don't get matched to any EPUB paragraph. Whisper's word timestamps are coarser than wav2vec2's (≈±200 ms vs. ≈±50 ms), but the matcher (§12) runs `rapidfuzz.fuzz.partial_ratio_alignment` at `min_score=45`, which is fuzzy enough that the precision loss doesn't shift paragraph boundaries by more than ≈1 s.
+
+**Chunked + resumable design.** Each chunk's word list is written to `chunks/<model>_<chunk_seconds>_<language>/<idx>.json` atomically as soon as it finishes. Before transcribing a chunk, the pipeline checks for an existing cache file; if present, the model call is skipped and the cached words are reused. After all chunks finish, the consolidated word list is written to `transcript.json` and the `chunks/` subdirectory is removed. On a container restart mid-job, the next run picks up at the first incomplete chunk.
 
 **Configuration** (all via `Settings` / env vars):
 
@@ -499,14 +499,15 @@ Word timestamps are **absolute** seconds in the original audio. No pre-trim is n
 | `WHISPER_MODEL` | `tiny.en` | `tiny.en` / `base.en` / `small.en` / `medium.en` / `large-v3` |
 | `WHISPER_DEVICE` | `cpu` | `cuda` for NVIDIA GPU; `mps` experimentally on Apple Silicon |
 | `WHISPER_COMPUTE_TYPE` | `int8` | `float16` on GPU |
-| `WHISPER_BATCH_SIZE` | `16` | Higher uses more memory |
-| `WHISPER_LANGUAGE` | `en` | wav2vec2 alignment model is loaded per-language |
+| `WHISPER_CPU_THREADS` | `4` | ctranslate2/openblas thread count; set to host CPU count |
+| `WHISPER_CHUNK_SECONDS` | `600` | Audio chunk length in seconds; lower on low-RAM hosts |
+| `WHISPER_LANGUAGE` | `en` | Passed straight through to `model.transcribe(language=…)` |
 
-The pipeline updates `status=aligning, progress=30` before transcription and `progress=85, fragment_count=len(words)` after. Transcription is the dominant cost: ~1× real-time on `tiny.en` CPU, scaling roughly linearly with model size; CUDA cuts this 10×+.
+The pipeline updates `status=aligning, progress=30` before transcription and `progress=85, fragment_count=len(words)` after. Transcription dominates wall-clock cost: roughly 0.02× real-time on Apple Silicon (M-series) with 8 threads + `tiny.en` (a 12 h audiobook → ~10 min) and 0.07–0.1× on a 4-core N100-class CPU (~50 min for the same book). CUDA cuts this another 5×+.
 
-**Live progress.** WhisperX exposes a `progress_callback` argument on both `transcribe()` and `align()`. The callback always receives the per-stage percentage (`combined_progress=True` only changes WhisperX's own printed string), so `_transcribe` wires two separate callbacks — one bound to `"transcribe"`, one to `"align"` — that push `(stage, percent)` tuples onto a `queue.Queue`. A drain coroutine reads each event and maps it through `_stage_progress`: transcribe segments span job-progress **30..57** and align segments span **57..85**. The result is one strictly-monotonic sweep across both stages, surfaced through `alignment_jobs.progress` to the mappings poll loop (`mappings/+page.svelte:64`) and the CLI runner.
+**Live progress.** `faster-whisper.transcribe()` returns a generator of segments. For each completed segment within a chunk, `_transcribe_audio_sync` emits a per-chunk percent through a progress callback, which a wrapper maps to the overall span `(chunk_idx + chunk_pct/100) / n_chunks * 100`. That percent goes onto a `queue.Queue`. A drain coroutine reads each event, maps it through `_stage_progress(percent)` to the job-progress range **30..85**, and writes monotonically-increasing values to `alignment_jobs.progress`, surfaced to the mappings poll loop (`mappings/+page.svelte:64`) and the CLI runner.
 
-A concurrent **heartbeat coroutine** runs alongside the drain. Every 30 s of model silence (e.g. between batched callbacks on a long book) it auto-increments `progress` by 1 — capped so it never overshoots the current stage's ceiling. Every 60 s it logs an `INFO`-level line of the form `alignment still running: elapsed=Nm  progress=X  stage=Y`, so an operator tailing the server log can tell the job is alive without staring at the DB.
+A concurrent **heartbeat coroutine** runs alongside the drain. Every 30 s of model silence it auto-increments `progress` by 1 (capped just below the stage ceiling). Every 60 s it logs an `INFO`-level line of the form `alignment still running: elapsed=Nm  progress=X`, so an operator tailing the server log can tell the job is alive without staring at the DB.
 
 The cached-transcript path skips both the drain and the heartbeat — it jumps straight from 30 to 85 in milliseconds.
 
@@ -514,7 +515,7 @@ The cached-transcript path skips both the drain and the heartbeat — it jumps s
 
 ## 12. Paragraph Matching (rapidfuzz)
 
-WhisperX gives a stream of timestamped words. Each EPUB paragraph is mapped onto a contiguous run of those words by **proportional-position fuzzy substring matching**.
+`faster-whisper` gives a stream of timestamped words. Each EPUB paragraph is mapped onto a contiguous run of those words by **proportional-position fuzzy substring matching**.
 
 ```python
 def _build_transcript_index(words):
@@ -597,7 +598,7 @@ job.warnings = json.dumps(warnings) if warnings else None
 job.completed_at = datetime.utcnow()
 ```
 
-The only ephemeral file is `concatenated.wav`, deleted on success. `transcript.json` (the cached WhisperX word list) survives between runs — see §5. WhisperX model weights are cached by `huggingface_hub` outside of the project tree.
+There are no ephemeral artifacts in the cache directory on success — per-chunk WAV slices live in a process tempdir and are deleted as each chunk completes, and the `chunks/` cache subfolder is removed once `transcript.json` is consolidated. `transcript.json` (the cached word list) survives between runs — see §5. Whisper model weights are cached by `huggingface_hub` outside of the project tree.
 
 ---
 
@@ -644,11 +645,11 @@ The array is ordered by `audio_start` (ascending), which matches EPUB reading or
 |---------|---------|
 | `ebooklib` | Open and iterate EPUB spine documents |
 | `beautifulsoup4` | Parse HTML within EPUB document items |
-| `whisperx` (optional `align` extra) | Whisper transcription + wav2vec2 forced alignment |
+| `faster-whisper` (optional `align` extra) | Whisper transcription with word-level timestamps |
 | `rapidfuzz` | Monotonic fuzzy substring matching of paragraphs to transcript |
 | `ffmpeg-python` | Audio concatenation and format normalization |
 
-The `whisperx` dependency lives behind the `align` optional extra (`pip install -e ".[align]"`). It pulls in PyTorch, which currently ships wheels only for Python ≤3.13.
+The `faster-whisper` dependency lives behind the `align` optional extra (`pip install -e ".[align]"`). It pulls in PyTorch, which currently ships wheels only for Python ≤3.13.
 
 **System dependencies:**
 
@@ -672,7 +673,7 @@ Install on Debian/Ubuntu: `apt-get install ffmpeg`
 | Ebook download HTTP error | `fetching_ebook` | Retry 3× with exponential backoff; fail job after exhaustion |
 | Unsupported audio format | `fetching_audio` | Set `status=failed`, `error_message="Unsupported audio format: {ext}"` |
 | ffmpeg concatenation error | `aligning` | Set `status=failed`, `error_message=str(e)` |
-| WhisperX raises an exception | `aligning` | Capture exception message; set `status=failed`, `error_message=str(e)` |
+| `faster-whisper` raises an exception | `aligning` | Capture exception message; set `status=failed`, `error_message=str(e)` |
 | Cache stale (`abs_updated_at` newer) | Pre-flight | Delete cached files; create a new `AlignmentJob` row; re-run from scratch |
 | Partial cache (audio present, ebook missing) | Pre-flight | Re-download missing files only; reuse what is present |
 
@@ -686,8 +687,8 @@ After matching, `_validate_sync_map` scores the result. Any warnings are stored 
 | `docfragment_gap: missing [N, …]` | More than two `DocFragment[N]` spine positions are absent between the first and last entry in the final sync map. Indicates whole chapters were skipped — likely a misclassification or a transcript coverage problem. |
 | `low_transcript_coverage: N/M paragraphs unmatched` | More than 10% of EPUB paragraphs failed to fuzzy-match (`score < 45`). Usual causes: back matter still in the EPUB, transcript model too small for the speaker, or large audio gaps. |
 | `unmatched_chapter_heading: '<text>'` | An EPUB chapter heading (h1/h2/h3 matching `PROLOGUE` / `EPILOGUE` / `CHAPTER N`) had no counterpart in the ABS `chapters` metadata, so it could not be snapped to a ground-truth start time. The entry is left at its fuzzy-matched position. Usual cause: the ABS chapter title omits the chapter number or uses an unusual format. |
-| `audio_offset_excessive: …` | *(legacy)* the WhisperX pipeline never pre-trims audio (`audio_offset` is always `0`), so this rule never fires. Preserved in `_validate_sync_map` for the older aeneas API. |
-| `chapter_rescale_extreme: …` | *(legacy)* the WhisperX pipeline doesn't do chapter rescaling, so its `scales` argument is always empty and this rule never fires. Preserved in `_validate_sync_map` for older callers. |
+| `audio_offset_excessive: …` | *(legacy)* the current pipeline never pre-trims audio (`audio_offset` is always `0`), so this rule never fires. Preserved in `_validate_sync_map` for the older aeneas API. |
+| `chapter_rescale_extreme: …` | *(legacy)* the current pipeline doesn't do chapter rescaling, so its `scales` argument is always empty and this rule never fires. Preserved in `_validate_sync_map` for older callers. |
 
 Operationally: a `complete_with_warnings` job is still consumable — the sync map is written and the API serves it. Warnings just surface what to check: usually re-classifying spine items or bumping `WHISPER_MODEL` to `base.en`/`small.en` resolves the underlying issue.
 

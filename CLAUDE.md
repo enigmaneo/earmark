@@ -42,7 +42,7 @@ Project documentation lives in `docs/`:
 uv python install 3.13         # Python 3.12 or 3.13 (pyproject.toml pins <3.14)
 uv venv --python 3.13          # only if your default uv venv was created on a newer Python
 uv sync                        # core deps only
-uv sync --extra align          # core deps + WhisperX + torch (~2 GB) — use this for alignment jobs
+uv sync --extra align          # core deps + faster-whisper + torch (~2 GB) — use this for alignment jobs
 uv run fastapi dev src/earmark/main.py --reload-dir src/earmark   # dev server on :8000
 uv run pytest                  # tests
 uv run ruff check .            # lint
@@ -50,7 +50,7 @@ uv run ruff format .           # format
 uv run mypy src/earmark        # type check
 ```
 
-> **Note:** `pyproject.toml` pins `requires-python = ">=3.12,<3.14"` because WhisperX/PyTorch lack 3.14 wheels. The `align` extra is only needed when running alignment jobs — the KOSync server, scheduler, and web UI run on core deps alone. Configure model/device via `WHISPER_MODEL`, `WHISPER_DEVICE`, `WHISPER_COMPUTE_TYPE` env vars (defaults: `tiny.en`, `cpu`, `int8`). See [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) for the full testing guide.
+> **Note:** `pyproject.toml` pins `requires-python = ">=3.12,<3.14"` because PyTorch lacks 3.14 wheels. The `align` extra is only needed when running alignment jobs — the KOSync server, scheduler, and web UI run on core deps alone. Transcription runs `faster-whisper` directly (no wav2vec2 forced-alignment pass); audio is split into chunks and each chunk's words are cached to disk so a restart resumes from the last finished chunk. Tune via env vars: `WHISPER_MODEL` (`tiny.en`), `WHISPER_DEVICE` (`cpu`), `WHISPER_COMPUTE_TYPE` (`int8`), `WHISPER_CPU_THREADS` (`4`), `WHISPER_CHUNK_SECONDS` (`600`), `WHISPER_LANGUAGE` (`en`). See [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) for the full testing guide.
 
 ### Frontend (SvelteKit)
 

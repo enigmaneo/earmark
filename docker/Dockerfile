@@ -1,10 +1,11 @@
 # syntax=docker/dockerfile:1
 
 ###############################################################################
-# Backend – dependency builder (WhisperX alignment engine)
+# Backend – dependency builder (faster-whisper alignment engine)
 ###############################################################################
-# WhisperX requires Python ≤3.13 (PyTorch wheel matrix). The 'align' extra
-# pulls in torch + faster-whisper + the wav2vec2 alignment models on first use.
+# The 'align' extra requires Python ≤3.13 (ctranslate2 / onnxruntime wheel
+# matrix) and pulls in faster-whisper + its inference deps (ctranslate2, av,
+# onnxruntime, huggingface-hub).
 FROM python:3.13-slim AS backend-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,7 +21,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Install alignment extra (WhisperX + torch). Skip if you'll never run alignment.
+# Install alignment extra (faster-whisper). Skip if you'll never run alignment.
 RUN uv pip install -e ".[align]"
 
 COPY src/earmark ./src/earmark
@@ -40,7 +41,11 @@ COPY --from=backend-builder /app/.venv ./.venv
 COPY --from=backend-builder /app/src ./src
 
 ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    OMP_NUM_THREADS=4 \
+    MKL_NUM_THREADS=4 \
+    OPENBLAS_NUM_THREADS=4 \
+    TOKENIZERS_PARALLELISM=false
 
 RUN mkdir -p /app/data
 
