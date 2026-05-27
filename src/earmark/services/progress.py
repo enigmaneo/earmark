@@ -51,23 +51,12 @@ async def write_reading_progress(
     resolved_title = mapped_title or title or document
 
     if mapping is not None:
-        result = await session.execute(
-            select(ReadingProgress).where(
-                ReadingProgress.kosync_user_id == kosync_user_id,
-                ReadingProgress.document == document,
-            )
-        )
-        existing_record = result.scalar_one_or_none()
-        if existing_record is None:
-            from earmark.models import KosyncUser
-            user_result = await session.execute(
-                select(KosyncUser).where(KosyncUser.id == kosync_user_id)
-            )
-            kosync_user = user_result.scalar_one_or_none()
-            if kosync_user is not None and kosync_user.user_id is None:
-                kosync_user.user_id = mapping.user_id
-                session.add(kosync_user)
-                await session.flush()
+        from earmark.models import KosyncUser
+        kosync_user = await session.get(KosyncUser, kosync_user_id)
+        if kosync_user is not None and kosync_user.user_id is None:
+            kosync_user.user_id = mapping.user_id
+            session.add(kosync_user)
+            await session.flush()
 
     await session.execute(
         update(ReadingProgress)
