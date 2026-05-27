@@ -1,8 +1,6 @@
 import asyncio
-import gc
 import json
 import logging
-import math
 import re
 import shutil
 import tempfile
@@ -321,131 +319,94 @@ def _ffmpeg_concat_sync(audio_files: list[Path], output_path: Path) -> None:
         concat_list.unlink(missing_ok=True)
 
 
-def _probe_duration_sync(audio_path: Path) -> float:
-    info = ffmpeg.probe(str(audio_path))
-    return float(info["format"]["duration"])
-
-
-def _extract_chunk_sync(
-    src: Path, start_s: float, duration_s: float, out_path: Path
-) -> None:
-    (
-        ffmpeg.input(str(src), ss=start_s, t=duration_s)
-        .output(str(out_path), ar=16000, ac=1, acodec="pcm_s16le")
-        .overwrite_output()
-        .run(quiet=True)
-    )
-
-
-def _transcribe_audio_sync(
+async def _run_transcribe_worker(
     audio_path: Path,
-    model_name: str,
-    device: str,
-    compute_type: str,
-    cpu_threads: int,
-    language: str,
-    chunk_seconds: int,
     chunk_cache_dir: Path,
-    progress_cb: object = None,  # Callable[[float], None] | None
-) -> list[dict]:  # type: ignore[type-arg]
-    """Transcribe with faster-whisper, chunked, with per-chunk caching.
+    progress_cb: object,  # Callable[[float], None]
+) -> int:
+    """Spawn ``earmark.services.transcribe_worker`` and stream its progress.
 
-    Audio is split into ``chunk_seconds`` windows via ffmpeg so the full
-    audio array is never held in memory. Each chunk is decoded greedily
-    (``beam_size=1, best_of=1``) with word timestamps emitted by Whisper
-    itself — there is no wav2vec2 forced-alignment pass.
+    Returns the chunk count reported by the worker, which the caller uses
+    to assemble the final ``words`` list from the on-disk per-chunk cache.
+    Raises ``RuntimeError`` if the worker exits non-zero.
 
-    Each chunk's word list is written to ``chunk_cache_dir/<idx>.json``
-    atomically. On a restart the cached chunks are reused so a long run
-    survives container restarts with bounded retry cost.
+    Running the heavy faster-whisper / ctranslate2 / onnxruntime stack in a
+    short-lived child process keeps the main FastAPI worker's resident set
+    flat across jobs — native buffers (~230 MB on tiny.en) cannot be freed
+    from Python and would otherwise accumulate.
     """
-    from faster_whisper import WhisperModel
+    import os
+    import sys
 
-    total_duration = _probe_duration_sync(audio_path)
-    n_chunks = max(1, math.ceil(total_duration / chunk_seconds))
-    chunk_cache_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable, "-m", "earmark.services.transcribe_worker",
+        "--audio-path", str(audio_path),
+        "--model", settings.whisper_model,
+        "--device", settings.whisper_device,
+        "--compute-type", settings.whisper_compute_type,
+        "--cpu-threads", str(settings.whisper_cpu_threads),
+        "--language", settings.whisper_language,
+        "--chunk-seconds", str(settings.whisper_chunk_seconds),
+        "--chunk-cache-dir", str(chunk_cache_dir),
+    ]
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    assert proc.stdout is not None and proc.stderr is not None
 
-    def _chunk_words_from_cache(idx: int) -> list[dict] | None:  # type: ignore[type-arg]
-        path = chunk_cache_dir / f"{idx:04d}.json"
-        if not path.exists():
-            return None
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))["words"]
-        except Exception:
-            return None
+    n_chunks_seen = 0
 
-    def _write_chunk_cache(idx: int, words: list[dict]) -> None:  # type: ignore[type-arg]
-        path = chunk_cache_dir / f"{idx:04d}.json"
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps({"words": words}), encoding="utf-8")
-        tmp.replace(path)
-
-    def _emit(chunk_idx: int, chunk_pct: float) -> None:
-        if progress_cb is None:
-            return
-        overall = (chunk_idx + max(0.0, min(100.0, chunk_pct)) / 100.0) / n_chunks * 100.0
-        progress_cb(overall)  # type: ignore[operator]
-
-    model_kwargs = {"device": device, "compute_type": compute_type}
-    if device == "cpu":
-        model_kwargs["cpu_threads"] = cpu_threads  # type: ignore[assignment]
-    model: object | None = None
-    work_dir = Path(tempfile.mkdtemp(prefix="earmark_chunk_"))
-    all_words: list[dict] = []  # type: ignore[type-arg]
-    try:
-        for i in range(n_chunks):
-            start_offset = i * chunk_seconds
-            cached = _chunk_words_from_cache(i)
-            if cached is not None:
-                logger.info("Using cached chunk %d/%d (%d words)", i + 1, n_chunks, len(cached))
-                all_words.extend(cached)
-                _emit(i, 100.0)
-                continue
-
-            if model is None:
-                model = WhisperModel(model_name, **model_kwargs)  # type: ignore[arg-type]
-
-            dur = min(float(chunk_seconds), total_duration - start_offset)
-            chunk_path = work_dir / f"chunk_{i:04d}.wav"
-            _extract_chunk_sync(audio_path, start_offset, dur, chunk_path)
-
-            segments, _info = model.transcribe(  # type: ignore[attr-defined]
-                str(chunk_path),
-                beam_size=1,
-                best_of=1,
-                language=language,
-                word_timestamps=True,
-                vad_filter=True,
-            )
-
-            chunk_words: list[dict] = []  # type: ignore[type-arg]
-            for segment in segments:
-                if segment.end and dur > 0:
-                    _emit(i, float(segment.end) / dur * 100.0)
-                for w in segment.words or []:
-                    if w.start is None or w.end is None or not w.word:
-                        continue
-                    chunk_words.append({
-                        "word": str(w.word).strip(),
-                        "start": float(w.start) + start_offset,
-                        "end": float(w.end) + start_offset,
-                    })
-
-            _write_chunk_cache(i, chunk_words)
-            all_words.extend(chunk_words)
-            _emit(i, 100.0)
-
+    async def _read_stdout() -> None:
+        nonlocal n_chunks_seen
+        while True:
+            line = await proc.stdout.readline()  # type: ignore[union-attr]
+            if not line:
+                return
             try:
-                chunk_path.unlink()
-            except OSError:
-                pass
-            gc.collect()
+                event = json.loads(line.decode("utf-8").strip())
+            except Exception:
+                logger.debug("worker stdout (unparsed): %s", line)
+                continue
+            kind = event.get("event")
+            if kind == "start":
+                n_chunks_seen = int(event.get("n_chunks", 0))
+            elif kind == "progress":
+                progress_cb(float(event["percent"]))  # type: ignore[operator]
 
-        return all_words
+    async def _read_stderr() -> None:
+        while True:
+            line = await proc.stderr.readline()  # type: ignore[union-attr]
+            if not line:
+                return
+            logger.info("transcribe_worker: %s", line.decode("utf-8").rstrip())
+
+    stdout_task = asyncio.create_task(_read_stdout())
+    stderr_task = asyncio.create_task(_read_stderr())
+    try:
+        returncode = await proc.wait()
     finally:
-        del model
-        gc.collect()
-        shutil.rmtree(work_dir, ignore_errors=True)
+        await stdout_task
+        await stderr_task
+    if returncode != 0:
+        raise RuntimeError(f"transcribe_worker exited {returncode}")
+    return n_chunks_seen
+
+
+def _consolidate_chunk_cache(
+    chunk_cache_dir: Path, n_chunks: int,
+) -> list[dict]:  # type: ignore[type-arg]
+    """Read per-chunk word lists written by the worker into one flat list."""
+    words: list[dict] = []  # type: ignore[type-arg]
+    for i in range(n_chunks):
+        path = chunk_cache_dir / f"{i:04d}.json"
+        if not path.exists():
+            raise RuntimeError(f"missing chunk cache file: {path}")
+        words.extend(json.loads(path.read_text(encoding="utf-8"))["words"])
+    return words
 
 
 def _normalize_text(s: str) -> str:
@@ -1080,18 +1041,12 @@ class AlignmentPipeline:
 
         drain_task = asyncio.create_task(_drain())
         heartbeat_task = asyncio.create_task(_heartbeat())
+        n_chunks = 0
         try:
-            words = await asyncio.to_thread(
-                _transcribe_audio_sync,
-                audio_path,
-                settings.whisper_model,
-                settings.whisper_device,
-                settings.whisper_compute_type,
-                settings.whisper_cpu_threads,
-                settings.whisper_language,
-                settings.whisper_chunk_seconds,
-                chunk_cache_dir,
-                _cb,
+            n_chunks = await _run_transcribe_worker(
+                audio_path=audio_path,
+                chunk_cache_dir=chunk_cache_dir,
+                progress_cb=_cb,
             )
         finally:
             prog_q.put_nowait(None)  # sentinel — ends the drain loop
@@ -1101,6 +1056,8 @@ class AlignmentPipeline:
                 await heartbeat_task
             except asyncio.CancelledError:
                 pass
+
+        words = _consolidate_chunk_cache(chunk_cache_dir, n_chunks)
 
         cache_path.write_text(
             json.dumps({"model": settings.whisper_model, "words": words}),
