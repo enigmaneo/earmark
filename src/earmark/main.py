@@ -1,8 +1,9 @@
 import logging
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from earmark.config import settings
@@ -29,6 +30,8 @@ def _configure_logging() -> None:
 
 _configure_logging()
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -48,6 +51,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def log_requests_middleware(request: Request, call_next):
+    if not settings.log_requests:
+        return await call_next(request)
+    body = await request.body()
+    start = time.perf_counter()
+    response = await call_next(request)
+    ms = (time.perf_counter() - start) * 1000
+    body_str = body.decode("utf-8", errors="replace") if body else ""
+    headers_str = dict(request.headers)
+    logger.info("%s %s → %d (%.1f ms) headers=%s body=%s", request.method, request.url.path, response.status_code, ms, headers_str, body_str)
+    return response
+
 
 app.include_router(auth.router)
 app.include_router(users.router)
