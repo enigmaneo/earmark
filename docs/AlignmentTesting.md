@@ -67,15 +67,33 @@ Pipeline progress:
   [17:07:08] Parsing EPUB and extracting paragraphs
              Paragraphs extracted: 3,434
   [17:07:24] Running WhisperX transcription + alignment
-             (progress ticks 30 → 85 segment-by-segment as WhisperX runs)
+  [17:07:24] progress: 30%
+  [17:09:13] progress: 32%
+  [17:11:42] progress: 35%
+  …
+  [17:54:08] progress: 57%
+  [17:56:30] progress: 60%
+  …
+  [18:22:51] progress: 85%
   [18:23:11] Complete
              Fragments aligned:    3,420
 
 Completed in 1h 16m
+```
+
+Transcribe contributes job progress **30..57**; align contributes **57..85**. The drain coroutine pushes a DB write whenever the integer mapping advances, and a heartbeat coroutine auto-nudges progress every 30 s if WhisperX has been silent in the meantime (so the bar never sits dead for more than half a minute). The server log also receives an `INFO` line every 60 s:
+
+```
+INFO  alignment still running: elapsed=12m04s progress=39 stage=transcribe
+INFO  alignment still running: elapsed=13m05s progress=40 stage=transcribe
 …
 ```
 
-The `progress` column on the `AlignmentJob` row advances live during the WhisperX step thanks to `whisperx.transcribe`/`whisperx.align`'s `progress_callback`; watch with `sqlite3 earmark.db "SELECT status, progress FROM alignment_jobs ORDER BY id DESC LIMIT 1;"` for an external view.
+For an external view, watch the DB directly:
+
+```bash
+watch -n 5 'sqlite3 earmark.db "SELECT status, progress FROM alignment_jobs ORDER BY id DESC LIMIT 1;"'
+```
 
 Expect transcription to dominate runtime — on CPU with the `tiny.en` model, a 12-hour audiobook takes roughly an hour; `base.en` is roughly 2×, and `medium.en` is 5×+. A CUDA GPU brings this down by an order of magnitude.
 
@@ -124,7 +142,7 @@ To exercise these in tests, run `uv run pytest tests/test_alignment.py -k valida
 | `Distribution torch can't be installed … no wheels for cp314` | Python 3.14 venv | Recreate venv with Python 3.12 or 3.13 |
 | First sync-map entry is praise/blurb text | EPUB front matter not detected as front matter | See `_classify_spine` in `src/earmark/services/alignment.py` — landmarks/title/filename/blurb signals |
 | `low_transcript_coverage` warning on a clean book | Whisper model too small | Try `WHISPER_MODEL=base.en` or `small.en` |
-| Run times out / OOM | Audio too long for available RAM | Use `int8` compute_type and `tiny.en` model |
+| Run times out / OOM | Audio too long for available RAM | Use `int8` compute_type and `tiny.en` model; lower `WHISPER_CHUNK_SECONDS` (e.g. 300) and `WHISPER_BATCH_SIZE` (e.g. 1) |
 | ffmpeg `No such file or directory` in concat list | Relative paths in concat list | Fixed in code (uses absolute paths) |
 
 ---

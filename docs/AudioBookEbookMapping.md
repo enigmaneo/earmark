@@ -504,7 +504,11 @@ Word timestamps are **absolute** seconds in the original audio. No pre-trim is n
 
 The pipeline updates `status=aligning, progress=30` before transcription and `progress=85, fragment_count=len(words)` after. Transcription is the dominant cost: ~1× real-time on `tiny.en` CPU, scaling roughly linearly with model size; CUDA cuts this 10×+.
 
-**Live progress.** WhisperX accepts a `progress_callback` argument on both `transcribe()` and `align()` (with `combined_progress=True`, transcribe contributes 0..50 and align contributes 50..100). `_transcribe` wires a thread-safe callback that pushes each segment-complete event onto a `queue.Queue`; a concurrent drain coroutine maps the WhisperX percentage onto the job's 30–85 range via `_map_whisper_progress` and writes it to `alignment_jobs.progress`. So during a multi-hour run the mappings poll loop (`mappings/+page.svelte:64`) and the manual runner in `testing/test_alignment.py` both tick smoothly instead of sitting frozen at 30 for the entire WhisperX step. The cached-transcript path skips this — it never spins up the drain task and jumps straight to 85 in milliseconds.
+**Live progress.** WhisperX exposes a `progress_callback` argument on both `transcribe()` and `align()`. The callback always receives the per-stage percentage (`combined_progress=True` only changes WhisperX's own printed string), so `_transcribe` wires two separate callbacks — one bound to `"transcribe"`, one to `"align"` — that push `(stage, percent)` tuples onto a `queue.Queue`. A drain coroutine reads each event and maps it through `_stage_progress`: transcribe segments span job-progress **30..57** and align segments span **57..85**. The result is one strictly-monotonic sweep across both stages, surfaced through `alignment_jobs.progress` to the mappings poll loop (`mappings/+page.svelte:64`) and the CLI runner.
+
+A concurrent **heartbeat coroutine** runs alongside the drain. Every 30 s of model silence (e.g. between batched callbacks on a long book) it auto-increments `progress` by 1 — capped so it never overshoots the current stage's ceiling. Every 60 s it logs an `INFO`-level line of the form `alignment still running: elapsed=Nm  progress=X  stage=Y`, so an operator tailing the server log can tell the job is alive without staring at the DB.
+
+The cached-transcript path skips both the drain and the heartbeat — it jumps straight from 30 to 85 in milliseconds.
 
 ---
 
