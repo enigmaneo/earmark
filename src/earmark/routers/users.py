@@ -1,4 +1,3 @@
-import hashlib
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -45,10 +44,9 @@ async def create_user(
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=402, detail="Username already taken")
 
-    password_hash = hashlib.md5(body.password.encode()).hexdigest()
     user = KosyncUser(
         username=body.username,
-        password_hash=password_hash,
+        password_hash=body.password,
         user_id=web_user.id if web_user else None,
     )
     session.add(user)
