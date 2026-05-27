@@ -101,7 +101,7 @@
 
 	function handleRowClick(m: MappingRead) {
 		if (m.kosync_document) {
-			goto(`/?document=${m.kosync_document}`);
+			goto(`/progress?document=${m.kosync_document}`);
 		}
 	}
 </script>
