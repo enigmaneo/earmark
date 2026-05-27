@@ -20,12 +20,13 @@ async def _register_and_login(client: AsyncClient, email: str, password: str) ->
 
 
 async def _create_kosync_and_link(client: AsyncClient, username: str, token: str) -> dict[str, str]:
+    hashed = md5("hunter2")
     await client.post(
         "/users/create",
-        json={"username": username, "password": "hunter2"},
+        json={"username": username, "password": hashed},
         headers={"Authorization": f"Bearer {token}"},
     )
-    return {"x-auth-user": username, "x-auth-key": md5("hunter2")}
+    return {"x-auth-user": username, "x-auth-key": hashed}
 
 
 @pytest.fixture

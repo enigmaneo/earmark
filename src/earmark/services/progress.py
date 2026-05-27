@@ -53,7 +53,11 @@ async def write_reading_progress(
         )
     ).scalar_one_or_none()
 
-    if existing_latest is not None and existing_latest.progress == progress:
+    if (
+        existing_latest is not None
+        and existing_latest.progress == progress
+        and existing_latest.percentage == percentage
+    ):
         return existing_latest
 
     result = await session.execute(

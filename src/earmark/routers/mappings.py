@@ -319,9 +319,17 @@ async def list_calibre_ebooks(
     source = CalibreOpdsSource()
     try:
         return await source.search(title, author)
-    except httpx.HTTPError:
+    except httpx.HTTPStatusError as exc:
+        logger.error("Calibre Web OPDS returned %s", exc.response.status_code, exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Calibre Web returned HTTP {exc.response.status_code}",
+        )
+    except httpx.HTTPError as exc:
         logger.error("Calibre Web OPDS request failed", exc_info=True)
-        raise HTTPException(status_code=502, detail="Calibre Web is unreachable")
+        raise HTTPException(
+            status_code=502, detail=f"Calibre Web is unreachable: {exc}"
+        )
 
 
 @router.post("/mappings", response_model=MappingRead, status_code=201)

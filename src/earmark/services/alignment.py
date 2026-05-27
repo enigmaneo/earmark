@@ -812,17 +812,21 @@ class AlignmentPipeline:
             return
 
         if source == "local":
+            # Reachable only for legacy/CLI jobs with no explicit ebook_path —
+            # mapping-driven jobs always carry one (the POST /web/mappings
+            # endpoint requires it for local source).
             media = item_metadata.get("media", {})
             metadata = media.get("metadata", {})
             title = metadata.get("title", "")
             author = metadata.get("authorName")
-            candidates = await LocalEbookSource().search(title, author)
+            local_source = LocalEbookSource()
+            candidates = await local_source.search(title, author)
             if not candidates:
                 raise ValueError(
                     f"No EPUB found in {settings.ebook_local_root} for "
                     f"title={title!r} author={author!r}"
                 )
-            await LocalEbookSource().fetch(candidates[0].ref, dest)
+            await local_source.fetch(candidates[0].ref, dest)
             return
 
         # Fallback: pull from the ABS item itself.

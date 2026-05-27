@@ -1,7 +1,12 @@
+import logging
+import re
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from earmark.config import settings
+
+logger = logging.getLogger(__name__)
 
 engine = create_async_engine(settings.database_url, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
@@ -44,7 +49,13 @@ async def init_db() -> None:
 
 
 async def _relax_not_null_sqlite(conn, table: str, columns: tuple[str, ...]) -> None:
-    """Remove NOT NULL from the named columns of `table` by editing sqlite_master."""
+    """Remove NOT NULL from the named columns of `table` by editing sqlite_master.
+
+    Allows untyped/quoted column names and arbitrary modifiers (DEFAULT, COLLATE, …)
+    between the column definition and the NOT NULL clause. After mutation we bump
+    schema_version so the connection's cached schema reparses, then run
+    integrity_check to catch any corruption from a malformed rewrite.
+    """
     info = await conn.exec_driver_sql(f"PRAGMA table_info({table})")
     rows = info.fetchall()
     needs_fix = any(name in columns and notnull == 1 for _, name, _, notnull, _, _ in rows)
@@ -60,15 +71,26 @@ async def _relax_not_null_sqlite(conn, table: str, columns: tuple[str, ...]) -> 
         return
     create_sql = row[0]
     new_sql = create_sql
+    unmatched: list[str] = []
     for col in columns:
-        # Match "<col> <type...> NOT NULL" and drop the NOT NULL.
-        import re as _re
-
-        new_sql = _re.sub(
-            rf"(\b{_re.escape(col)}\b\s+[A-Z]+(?:\(\d+\))?)\s+NOT NULL",
-            r"\1",
-            new_sql,
+        # Match the column definition (optionally quoted name + everything up to
+        # NOT NULL that isn't a comma or paren) and drop the NOT NULL clause.
+        pattern = re.compile(
+            rf'(["`\[]?{re.escape(col)}["`\]]?\s+[^,()]*?)\s+NOT\s+NULL',
+            re.IGNORECASE,
         )
+        new_sql, n = pattern.subn(r"\1", new_sql, count=1)
+        if n == 0:
+            unmatched.append(col)
+
+    if unmatched:
+        logger.warning(
+            "Could not relax NOT NULL on %s.%s — regex did not match in CREATE TABLE statement. "
+            "Calibre-source mappings may fail to insert until the schema is updated manually.",
+            table,
+            ", ".join(unmatched),
+        )
+
     if new_sql == create_sql:
         return
 
@@ -78,5 +100,16 @@ async def _relax_not_null_sqlite(conn, table: str, columns: tuple[str, ...]) -> 
             "UPDATE sqlite_master SET sql = ? WHERE type='table' AND name = ?",
             (new_sql, table),
         )
+        # Force the connection to reparse the schema on next access.
+        version_row = await conn.exec_driver_sql("PRAGMA schema_version")
+        current_version = version_row.fetchone()[0]
+        await conn.exec_driver_sql(f"PRAGMA schema_version = {current_version + 1}")
     finally:
         await conn.exec_driver_sql("PRAGMA writable_schema=OFF")
+
+    check = await conn.exec_driver_sql("PRAGMA integrity_check")
+    result = check.fetchone()
+    if result is None or result[0] != "ok":
+        logger.error(
+            "SQLite integrity_check failed after relaxing NOT NULL on %s: %r", table, result
+        )

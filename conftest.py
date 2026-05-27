@@ -49,8 +49,11 @@ def md5(value: str) -> str:
 
 @pytest.fixture
 async def alice(client: AsyncClient) -> dict[str, str]:
-    await client.post("/users/create", json={"username": "alice", "password": "hunter2"})
-    return {"x-auth-user": "alice", "x-auth-key": md5("hunter2")}
+    # KOReader sends the MD5 of the password as the "password" on registration,
+    # and the same hash as x-auth-key on subsequent requests.
+    hashed = md5("hunter2")
+    await client.post("/users/create", json={"username": "alice", "password": hashed})
+    return {"x-auth-user": "alice", "x-auth-key": hashed}
 
 
 PROGRESS_PAYLOAD = {
