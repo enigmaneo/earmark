@@ -19,12 +19,12 @@ Prints real-time stage progress and a sync map preview on completion.
 **1. Python environment**
 
 ```bash
-uv sync --extra align            # core deps + WhisperX + torch (requires Python 3.12 or 3.13)
+uv sync --extra align            # core deps + faster-whisper + torch (requires Python 3.12 or 3.13)
 ```
 
 **2. System dependencies**
 
-WhisperX needs `ffmpeg` for audio decoding:
+`faster-whisper` needs `ffmpeg` for audio decoding:
 
 ```bash
 # macOS
@@ -91,17 +91,17 @@ Pipeline progress:
   [14:05:17] Fetching ebook
   [14:05:19] Parsing EPUB and extracting paragraphs
              Paragraphs extracted: 3,847
-  [14:05:21] Running WhisperX transcription + alignment
-  [14:47:33] Assembling sync map
+  [14:05:21] Running Whisper transcription
+  [14:15:33] Assembling sync map
              Fragments aligned:    3,820
-  [14:47:34] Complete
+  [14:15:34] Complete
 
-Completed in 45m 33s
+Completed in 13m 33s
 
 Job statistics:
   Paragraphs : 3,847
   Fragments  : 3,847
-  Duration   : 45m 33s
+  Duration   : 13m 33s
   Sync map   : .cache/earmark/li_abc123/sync_map.json
 
 Sync map preview (first 10 entries):
@@ -116,12 +116,13 @@ Sync map preview (first 10 entries):
 
 **Stage timestamps** — The wall-clock time at each status transition. The gap at
 `Fetching audio files` reflects download time (can be minutes for large books).
-The gap at `Running WhisperX transcription + alignment` is dominated by whisper
-inference — expect roughly 1× real-time on CPU with `tiny.en`, scaling with
-model size; CUDA cuts this 10×+. A 12-hour audiobook → ~1h on CPU `tiny.en`.
+The gap at `Running Whisper transcription` is dominated by Whisper inference —
+expect roughly 0.02× real-time on Apple Silicon with 8 threads + `tiny.en` (a
+12-hour audiobook → ~10 min on M-series), and roughly 0.07–0.1× on a 4-core
+N100-class CPU (~50 min for the same book). CUDA cuts this another 5×+.
 
 **Paragraph / fragment mismatch** — `fragment_count` is the number of
-**matched** paragraphs. When it's less than `paragraph_count`, WhisperX
+**matched** paragraphs. When it's less than `paragraph_count`, the matcher
 couldn't fuzzy-match those paragraphs to the audio transcript — typically
 front matter, back matter, or images. The skipped entries are dropped from
 the sync map; if more than 10% are dropped the job ends in

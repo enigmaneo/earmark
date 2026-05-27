@@ -980,33 +980,22 @@ async def test_pipeline_warns_on_unmatched_chapter_heading(
     assert any("unmatched_chapter_heading" in w for w in body["warnings"])
 
 
-# ── WhisperX stage-aware progress mapping ─────────────────────────────────────
+# ── Transcription progress mapping ────────────────────────────────────────────
 
 
-def test_stage_progress_transcribe_endpoints() -> None:
-    assert _stage_progress("transcribe", 0) == 30
-    assert _stage_progress("transcribe", 100) == 57
-
-
-def test_stage_progress_align_endpoints() -> None:
-    assert _stage_progress("align", 0) == 57
-    assert _stage_progress("align", 100) == 85
+def test_stage_progress_endpoints() -> None:
+    assert _stage_progress(0) == 30
+    assert _stage_progress(100) == 85
 
 
 def test_stage_progress_clamps() -> None:
-    assert _stage_progress("transcribe", -10) == 30
-    assert _stage_progress("transcribe", 200) == 57
-    assert _stage_progress("align", -10) == 57
-    assert _stage_progress("align", 200) == 85
+    assert _stage_progress(-10) == 30
+    assert _stage_progress(200) == 85
 
 
-def test_stage_progress_monotonic_across_boundary() -> None:
-    """Sweeping transcribe 0..100 then align 0..100 stays non-decreasing."""
+def test_stage_progress_monotonic() -> None:
     prev = -1
-    for stage, pct in [
-        *(("transcribe", p) for p in range(0, 101, 5)),
-        *(("align", p) for p in range(0, 101, 5)),
-    ]:
-        v = _stage_progress(stage, pct)
-        assert v >= prev, f"regression at ({stage}, {pct}): {v} < {prev}"
+    for pct in range(0, 101, 5):
+        v = _stage_progress(pct)
+        assert v >= prev, f"regression at {pct}: {v} < {prev}"
         prev = v

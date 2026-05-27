@@ -1,8 +1,6 @@
 import asyncio
-import gc
 import json
 import logging
-import math
 import re
 import shutil
 import tempfile
@@ -321,112 +319,94 @@ def _ffmpeg_concat_sync(audio_files: list[Path], output_path: Path) -> None:
         concat_list.unlink(missing_ok=True)
 
 
-def _probe_duration_sync(audio_path: Path) -> float:
-    info = ffmpeg.probe(str(audio_path))
-    return float(info["format"]["duration"])
-
-
-def _extract_chunk_sync(
-    src: Path, start_s: float, duration_s: float, out_path: Path
-) -> None:
-    (
-        ffmpeg.input(str(src), ss=start_s, t=duration_s)
-        .output(str(out_path), ar=16000, ac=1, acodec="pcm_s16le")
-        .overwrite_output()
-        .run(quiet=True)
-    )
-
-
-def _transcribe_audio_sync(
+async def _run_transcribe_worker(
     audio_path: Path,
-    model_name: str,
-    device: str,
-    compute_type: str,
-    batch_size: int,
-    language: str,
-    chunk_seconds: int,
-    progress_cb_transcribe: object = None,  # Callable[[float], None] | None
-    progress_cb_align: object = None,  # Callable[[float], None] | None
-) -> list[dict]:  # type: ignore[type-arg]
-    """Run WhisperX in chunks and return word-level timestamps.
+    chunk_cache_dir: Path,
+    progress_cb: object,  # Callable[[float], None]
+) -> int:
+    """Spawn ``earmark.services.transcribe_worker`` and stream its progress.
 
-    Audio is split into ``chunk_seconds`` windows via ffmpeg so the full audio
-    array is never held in memory. Transcription runs over all chunks first;
-    the Whisper model is then released before the alignment model is loaded,
-    so peak RAM is one model + one chunk's audio rather than both models +
-    the full audiobook.
+    Returns the chunk count reported by the worker, which the caller uses
+    to assemble the final ``words`` list from the on-disk per-chunk cache.
+    Raises ``RuntimeError`` if the worker exits non-zero.
+
+    Running the heavy faster-whisper / ctranslate2 / onnxruntime stack in a
+    short-lived child process keeps the main FastAPI worker's resident set
+    flat across jobs — native buffers (~230 MB on tiny.en) cannot be freed
+    from Python and would otherwise accumulate.
     """
-    import whisperx
+    import os
+    import sys
 
-    total_duration = _probe_duration_sync(audio_path)
-    n_chunks = max(1, math.ceil(total_duration / chunk_seconds))
+    cmd = [
+        sys.executable, "-m", "earmark.services.transcribe_worker",
+        "--audio-path", str(audio_path),
+        "--model", settings.whisper_model,
+        "--device", settings.whisper_device,
+        "--compute-type", settings.whisper_compute_type,
+        "--cpu-threads", str(settings.whisper_cpu_threads),
+        "--language", settings.whisper_language,
+        "--chunk-seconds", str(settings.whisper_chunk_seconds),
+        "--chunk-cache-dir", str(chunk_cache_dir),
+    ]
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    assert proc.stdout is not None and proc.stderr is not None
 
-    def _wrap_cb(cb: object, chunk_idx: int) -> object:
-        if cb is None:
-            return None
+    n_chunks_seen = 0
 
-        def _inner(percent: float) -> None:
-            overall = (chunk_idx + max(0.0, min(100.0, float(percent))) / 100.0) / n_chunks * 100.0
-            cb(overall)  # type: ignore[operator]
+    async def _read_stdout() -> None:
+        nonlocal n_chunks_seen
+        while True:
+            line = await proc.stdout.readline()  # type: ignore[union-attr]
+            if not line:
+                return
+            try:
+                event = json.loads(line.decode("utf-8").strip())
+            except Exception:
+                logger.debug("worker stdout (unparsed): %s", line)
+                continue
+            kind = event.get("event")
+            if kind == "start":
+                n_chunks_seen = int(event.get("n_chunks", 0))
+            elif kind == "progress":
+                progress_cb(float(event["percent"]))  # type: ignore[operator]
 
-        return _inner
+    async def _read_stderr() -> None:
+        while True:
+            line = await proc.stderr.readline()  # type: ignore[union-attr]
+            if not line:
+                return
+            logger.info("transcribe_worker: %s", line.decode("utf-8").rstrip())
 
-    chunk_dir = Path(tempfile.mkdtemp(prefix="earmark_chunk_"))
+    stdout_task = asyncio.create_task(_read_stdout())
+    stderr_task = asyncio.create_task(_read_stderr())
     try:
-        # Pass 1: transcribe all chunks with the Whisper model loaded once.
-        model = whisperx.load_model(
-            model_name, device, compute_type=compute_type, language=language
-        )
-        chunk_segments: list[tuple[float, list[dict]]] = []  # type: ignore[type-arg]
-        try:
-            for i in range(n_chunks):
-                start = i * chunk_seconds
-                dur = min(float(chunk_seconds), total_duration - start)
-                chunk_path = chunk_dir / f"chunk_{i:04d}.wav"
-                _extract_chunk_sync(audio_path, start, dur, chunk_path)
-                audio = whisperx.load_audio(str(chunk_path))
-                result = model.transcribe(
-                    audio, batch_size=batch_size, language=language,
-                    progress_callback=_wrap_cb(progress_cb_transcribe, i),
-                )
-                chunk_segments.append((start, result["segments"]))
-                del audio, result
-                gc.collect()
-        finally:
-            del model
-            gc.collect()
-
-        # Pass 2: align each chunk against the alignment model.
-        align_model, metadata = whisperx.load_align_model(
-            language_code=language, device=device,
-        )
-        words: list[dict] = []  # type: ignore[type-arg]
-        try:
-            for i, (start, segments) in enumerate(chunk_segments):
-                chunk_path = chunk_dir / f"chunk_{i:04d}.wav"
-                audio = whisperx.load_audio(str(chunk_path))
-                aligned = whisperx.align(
-                    segments, align_model, metadata, audio, device,
-                    return_char_alignments=False,
-                    progress_callback=_wrap_cb(progress_cb_align, i),
-                )
-                for seg in aligned.get("segments", []):
-                    for w in seg.get("words", []):
-                        if "start" in w and "end" in w and w.get("word"):
-                            words.append({
-                                "word": str(w["word"]).strip(),
-                                "start": float(w["start"]) + start,
-                                "end": float(w["end"]) + start,
-                            })
-                del audio, aligned
-                gc.collect()
-        finally:
-            del align_model
-            gc.collect()
-
-        return words
+        returncode = await proc.wait()
     finally:
-        shutil.rmtree(chunk_dir, ignore_errors=True)
+        await stdout_task
+        await stderr_task
+    if returncode != 0:
+        raise RuntimeError(f"transcribe_worker exited {returncode}")
+    return n_chunks_seen
+
+
+def _consolidate_chunk_cache(
+    chunk_cache_dir: Path, n_chunks: int,
+) -> list[dict]:  # type: ignore[type-arg]
+    """Read per-chunk word lists written by the worker into one flat list."""
+    words: list[dict] = []  # type: ignore[type-arg]
+    for i in range(n_chunks):
+        path = chunk_cache_dir / f"{i:04d}.json"
+        if not path.exists():
+            raise RuntimeError(f"missing chunk cache file: {path}")
+        words.extend(json.loads(path.read_text(encoding="utf-8"))["words"])
+    return words
 
 
 def _normalize_text(s: str) -> str:
@@ -434,27 +414,16 @@ def _normalize_text(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", s.lower())).strip()
 
 
-# Job-progress range the WhisperX step occupies. Transcription + alignment is
-# the longest stage; allocating 30..85 keeps room for parse_epub (≤25),
-# assembly (~92), and final state (100). The range is split evenly between the
-# two WhisperX stages so the progress sweep is monotonic across the boundary.
+# Job-progress range the transcription step occupies. Allocating 30..85
+# keeps room for parse_epub (≤25), assembly (~92), and final state (100).
 _WHISPER_PROGRESS_LO = 30
 _WHISPER_PROGRESS_HI = 85
-_TRANSCRIBE_HI = (_WHISPER_PROGRESS_LO + _WHISPER_PROGRESS_HI) // 2  # 57
-_ALIGN_LO = _TRANSCRIBE_HI  # 57
 
 
-def _stage_progress(stage: str, percent: float) -> int:
-    """Map ``(stage, 0..100)`` to the job's progress range.
-
-    ``stage="transcribe"`` covers 30..57; ``stage="align"`` covers 57..85.
-    Any other stage falls through to the transcribe range (defensive default).
-    """
+def _stage_progress(percent: float) -> int:
+    """Map ``0..100`` transcription percent to the job's 30..85 range."""
     p = max(0.0, min(100.0, float(percent)))
-    if stage == "align":
-        span = _WHISPER_PROGRESS_HI - _ALIGN_LO
-        return _ALIGN_LO + int(p * span / 100)
-    span = _TRANSCRIBE_HI - _WHISPER_PROGRESS_LO
+    span = _WHISPER_PROGRESS_HI - _WHISPER_PROGRESS_LO
     return _WHISPER_PROGRESS_LO + int(p * span / 100)
 
 
@@ -977,7 +946,7 @@ class AlignmentPipeline:
         return paragraphs, index, first_body_pos, last_body_pos
 
     async def _prepare_audio(self, audio_dir: Path) -> Path:
-        """Concatenate audio files into a single track for WhisperX."""
+        """Concatenate audio files into a single track for transcription."""
         audio_files = sorted(audio_dir.glob("*"))
         audio_files = [f for f in audio_files if f.is_file()]
         concat_path = audio_dir.parent / "concatenated.wav"
@@ -989,13 +958,16 @@ class AlignmentPipeline:
         return concat_path
 
     async def _transcribe(self, audio_path: Path) -> list[dict]:  # type: ignore[type-arg]
-        """Run WhisperX in a worker thread and return word-level timestamps.
+        """Run faster-whisper in a worker thread and return word-level timestamps.
 
-        Caches the transcript at `<cache_dir>/transcript.json` keyed on the
-        whisper model — iterating on the matching algorithm doesn't require
-        re-running the multi-minute transcription step.
+        Caches the consolidated transcript at `<cache_dir>/transcript.json`
+        keyed on the whisper model — iterating on the matching algorithm
+        doesn't require re-running the multi-minute transcription step.
+        Per-chunk word lists are also written to
+        ``<cache_dir>/chunks/<model>_<chunk_seconds>_<lang>/`` so a
+        mid-job restart resumes from the last completed chunk.
 
-        While WhisperX runs, segment-level progress events are forwarded
+        While transcription runs, per-chunk progress events are forwarded
         through a thread-safe queue and written to ``alignment_jobs.progress``
         so the UI poll loop sees the job tick smoothly across 30 → 85. A
         concurrent heartbeat coroutine auto-nudges progress when the model
@@ -1016,22 +988,17 @@ class AlignmentPipeline:
 
         import queue as _queue
 
-        # The queue carries (stage, percent) tuples from worker-thread
-        # callbacks, plus a single None sentinel from the finally block to
-        # cleanly terminate the drain coroutine.
+        # The queue carries percent floats from the worker thread plus a
+        # single None sentinel to cleanly terminate the drain coroutine.
         prog_q: _queue.Queue = _queue.Queue()
 
-        def _make_cb(stage: str):
-            def _cb(percent: float) -> None:
-                try:
-                    prog_q.put_nowait((stage, float(percent)))
-                except Exception:  # pragma: no cover — never raise out of WhisperX
-                    pass
-            return _cb
+        def _cb(percent: float) -> None:
+            try:
+                prog_q.put_nowait(float(percent))
+            except Exception:  # pragma: no cover — never raise out of the worker
+                pass
 
-        # Mutable state shared between drain + heartbeat. Plain dict to keep
-        # both coroutines free of `nonlocal` ceremony.
-        state = {"stage": "transcribe", "last_event": asyncio.get_running_loop().time()}
+        state = {"last_event": asyncio.get_running_loop().time()}
 
         async def _drain() -> None:
             last_written = _WHISPER_PROGRESS_LO
@@ -1042,10 +1009,8 @@ class AlignmentPipeline:
                     continue
                 if item is None:
                     return
-                stage, percent = item
-                state["stage"] = stage
                 state["last_event"] = asyncio.get_running_loop().time()
-                mapped = _stage_progress(stage, percent)
+                mapped = _stage_progress(item)
                 if mapped > last_written:
                     last_written = mapped
                     await self._update_status("aligning", progress=mapped)
@@ -1056,35 +1021,32 @@ class AlignmentPipeline:
             while True:
                 await asyncio.sleep(15)
                 now = asyncio.get_running_loop().time()
-                stage = state["stage"]
-                # Auto-nudge progress when no callback has landed recently,
-                # so the UI bar doesn't sit dead for minutes between batches.
-                cap = (_TRANSCRIBE_HI if stage == "transcribe" else _WHISPER_PROGRESS_HI) - 1
+                cap = _WHISPER_PROGRESS_HI - 1
                 if now - state["last_event"] >= 30 and (self.job.progress or 0) < cap:
                     await self._update_status("aligning", progress=(self.job.progress or 0) + 1)
                     state["last_event"] = now
                 if now - last_log >= 60:
                     elapsed = int(now - start)
                     logger.info(
-                        "alignment still running: elapsed=%dm%02ds progress=%d stage=%s",
-                        elapsed // 60, elapsed % 60, self.job.progress or 0, stage,
+                        "alignment still running: elapsed=%dm%02ds progress=%d",
+                        elapsed // 60, elapsed % 60, self.job.progress or 0,
                     )
                     last_log = now
 
+        chunk_key = (
+            f"{settings.whisper_model}_{settings.whisper_chunk_seconds}_"
+            f"{settings.whisper_language}"
+        )
+        chunk_cache_dir = self._cache_dir() / "chunks" / chunk_key
+
         drain_task = asyncio.create_task(_drain())
         heartbeat_task = asyncio.create_task(_heartbeat())
+        n_chunks = 0
         try:
-            words = await asyncio.to_thread(
-                _transcribe_audio_sync,
-                audio_path,
-                settings.whisper_model,
-                settings.whisper_device,
-                settings.whisper_compute_type,
-                settings.whisper_batch_size,
-                settings.whisper_language,
-                settings.whisper_chunk_seconds,
-                _make_cb("transcribe"),
-                _make_cb("align"),
+            n_chunks = await _run_transcribe_worker(
+                audio_path=audio_path,
+                chunk_cache_dir=chunk_cache_dir,
+                progress_cb=_cb,
             )
         finally:
             prog_q.put_nowait(None)  # sentinel — ends the drain loop
@@ -1095,10 +1057,14 @@ class AlignmentPipeline:
             except asyncio.CancelledError:
                 pass
 
+        words = _consolidate_chunk_cache(chunk_cache_dir, n_chunks)
+
         cache_path.write_text(
             json.dumps({"model": settings.whisper_model, "words": words}),
             encoding="utf-8",
         )
+        # The per-chunk cache is redundant once the consolidated transcript is on disk.
+        shutil.rmtree(chunk_cache_dir, ignore_errors=True)
         await self._update_status(
             "aligning", progress=_WHISPER_PROGRESS_HI, fragment_count=len(words),
         )
@@ -1151,10 +1117,13 @@ class AlignmentPipeline:
         # The forced timestamps then act as hard anchors for the interpolation
         # pass below, bounding drift to within a single chapter.
         unmatched_headings: list[str] = []
+        headings: list[dict] = []  # type: ignore[type-arg]
+        title_hit = 0
         if chapters:
             for entry in sync_map:
                 if not _EPUB_HEADING_RE.search(entry["ebook_pos"]):
                     continue
+                headings.append(entry)
                 m = _CHAPTER_HEADING_RE.match(entry["text_snippet"])
                 if not m:
                     continue
@@ -1166,6 +1135,43 @@ class AlignmentPipeline:
                 ch_end = float(chapters[abs_idx].get("end", ch_start))
                 entry["audio_start"] = ch_start
                 entry["audio_end"] = min(ch_start + 5.0, ch_end)
+                title_hit += 1
+
+        # Positional fallback: when no EPUB heading matched a numbered ABS
+        # chapter title (e.g. narrative-titled chapters paired with generic
+        # ABS titles like "01-68 …"), pick the integer offset that minimises
+        # mean |fuzzy_audio_start − chapters[off+i].start| and snap each
+        # heading to chapters[off+i].start. Same algorithm as
+        # testing/diff_chapters.py — see §17 of docs/AudioBookEbookMapping.md.
+        if chapters and title_hit == 0 and headings:
+            sync_starts = [float(h["audio_start"]) for h in headings]
+
+            def _mean_abs_diff(off: int) -> float:
+                total = 0.0
+                cnt = 0
+                for i, s in enumerate(sync_starts):
+                    idx = off + i
+                    if 0 <= idx < len(chapters):
+                        total += abs(float(chapters[idx]["start"]) - s)
+                        cnt += 1
+                return total / cnt if cnt else float("inf")
+
+            max_off = max(1, len(chapters) - len(headings) + 1)
+            offset = min(range(max_off), key=_mean_abs_diff)
+            snapped = 0
+            for i, entry in enumerate(headings):
+                abs_idx = offset + i
+                if abs_idx >= len(chapters):
+                    break
+                ch_start = float(chapters[abs_idx]["start"])
+                ch_end = float(chapters[abs_idx].get("end", ch_start))
+                entry["audio_start"] = ch_start
+                entry["audio_end"] = min(ch_start + 5.0, ch_end)
+                snapped += 1
+            logger.info(
+                "Positional chapter snap applied: offset=%d, snapped=%d/%d",
+                offset, snapped, len(headings),
+            )
 
         # Fuzzy matching can pick the wrong occurrence of a repeated phrase
         # inside a chapter (common in formulaic prose), producing local
@@ -1221,7 +1227,7 @@ class AlignmentPipeline:
             (cache_dir / ephemeral).unlink(missing_ok=True)
 
         total_duration = float(chapters[-1].get("end", 0) or 0) if chapters else 0.0
-        # No audio trim with WhisperX → audio_offset is always 0.
+        # No audio trim → audio_offset is always 0.
         warnings.extend(_validate_sync_map(sync_map, {}, total_duration, 0.0))
         # Coverage warning: lots of EPUB paragraphs that didn't match audio.
         if para_count and unmatched / para_count > 0.10:
