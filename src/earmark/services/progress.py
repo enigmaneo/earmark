@@ -43,6 +43,23 @@ async def write_reading_progress(
     filename: str | None = None,
     updated_at: datetime | None = None,
 ) -> ReadingProgress:
+    existing_latest = (
+        await session.execute(
+            select(ReadingProgress).where(
+                ReadingProgress.kosync_user_id == kosync_user_id,
+                ReadingProgress.document == document,
+                ReadingProgress.is_latest == True,  # noqa: E712
+            )
+        )
+    ).scalar_one_or_none()
+
+    if (
+        existing_latest is not None
+        and existing_latest.progress == progress
+        and existing_latest.percentage == percentage
+    ):
+        return existing_latest
+
     result = await session.execute(
         select(AbsEbookMapping).where(AbsEbookMapping.kosync_document == document)
     )

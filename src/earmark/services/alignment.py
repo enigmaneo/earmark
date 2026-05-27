@@ -16,6 +16,7 @@ from earmark.config import settings
 from earmark.database import AsyncSessionLocal
 from earmark.models import AbsLibraryItem, AlignmentJob
 from earmark.services.audiobookshelf import AudiobookshelfClient
+from earmark.services.ebook_sources import CalibreOpdsSource, LocalEbookSource
 
 logger = logging.getLogger(__name__)
 
@@ -787,22 +788,49 @@ class AlignmentPipeline:
             )
             return ebook_path
 
-        if self.job.ebook_path:
-            src = Path(settings.ebook_local_root) / self.job.ebook_path
-            await asyncio.to_thread(shutil.copy2, src, ebook_path)
-        else:
-            source = settings.ebook_source
-            if source == "abs":
-                await self._download_ebook_from_abs(ebook_path, item_metadata)
-            elif source == "cwa":
-                await self._download_ebook_from_cwa(ebook_path, item_metadata)
-            elif source == "local":
-                await self._download_ebook_from_local(ebook_path, item_metadata)
-            else:
-                raise ValueError(f"Unknown ebook_source: {source!r}")
+        await self._fetch_ebook_from_source(ebook_path, item_metadata)
 
         await self._update_status("fetching_ebook", progress=18, ebook_cache_path=str(ebook_path))
         return ebook_path
+
+    async def _fetch_ebook_from_source(
+        self, dest: Path, item_metadata: dict  # type: ignore[type-arg]
+    ) -> None:
+        source = self.job.ebook_source
+
+        # Legacy / CLI path: explicit local path on the job.
+        if source in (None, "local") and self.job.ebook_path:
+            src = Path(settings.ebook_local_root) / self.job.ebook_path
+            await asyncio.to_thread(shutil.copy2, src, dest)
+            return
+
+        if source == "calibre":
+            ref = self.job.ebook_source_ref
+            if not ref:
+                raise ValueError("Calibre source has no ebook_source_ref")
+            await CalibreOpdsSource().fetch(ref, dest)
+            return
+
+        if source == "local":
+            # Reachable only for legacy/CLI jobs with no explicit ebook_path —
+            # mapping-driven jobs always carry one (the POST /web/mappings
+            # endpoint requires it for local source).
+            media = item_metadata.get("media", {})
+            metadata = media.get("metadata", {})
+            title = metadata.get("title", "")
+            author = metadata.get("authorName")
+            local_source = LocalEbookSource()
+            candidates = await local_source.search(title, author)
+            if not candidates:
+                raise ValueError(
+                    f"No EPUB found in {settings.ebook_local_root} for "
+                    f"title={title!r} author={author!r}"
+                )
+            await local_source.fetch(candidates[0].ref, dest)
+            return
+
+        # Fallback: pull from the ABS item itself.
+        await self._download_ebook_from_abs(dest, item_metadata)
 
     async def _download_ebook_from_abs(
         self, dest: Path, item_metadata: dict  # type: ignore[type-arg]
@@ -821,119 +849,6 @@ class AlignmentPipeline:
                     raise
                 logger.warning("Ebook download attempt %d/3 failed: %s", attempt + 1, exc)
                 await asyncio.sleep(2**attempt)
-
-    async def _download_ebook_from_cwa(
-        self, dest: Path, item_metadata: dict  # type: ignore[type-arg]
-    ) -> None:
-        import base64
-        import re
-        import unicodedata
-
-        media = item_metadata.get("media", {})
-        title = media.get("metadata", {}).get("title", "")
-        author = media.get("metadata", {}).get("authorName", "")
-
-        def normalize(s: str) -> str:
-            s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
-            return re.sub(r"[^a-z0-9 ]", "", s.lower()).strip()
-
-        norm_title = normalize(title)
-        norm_author = normalize(author)
-
-        credentials = base64.b64encode(
-            f"{settings.cwa_username}:{settings.cwa_password}".encode()
-        ).decode()
-        headers = {"Authorization": f"Basic {credentials}"}
-
-        async with httpx.AsyncClient(base_url=settings.cwa_url) as client:
-            resp = await client.get(
-                f"/opds/search/{norm_title}", headers=headers, follow_redirects=True
-            )
-            resp.raise_for_status()
-
-        from bs4 import BeautifulSoup
-
-        soup = BeautifulSoup(resp.text, "xml")
-        candidates = []
-        for entry in soup.find_all("entry"):
-            entry_title = entry.find("title")
-            entry_title_text = entry_title.get_text() if entry_title else ""
-            if normalize(entry_title_text) != norm_title:
-                continue
-            author_tag = entry.find("author")
-            if author_tag:
-                name_tag = author_tag.find("name")
-                entry_author = name_tag.get_text() if name_tag else ""
-                if normalize(entry_author) != norm_author:
-                    continue
-            link = entry.find("link", attrs={"type": "application/epub+zip"})
-            if link:
-                candidates.append(link.get("href", ""))
-
-        if len(candidates) == 0:
-            raise ValueError(
-                f"CWA: no EPUB match for title={norm_title!r} author={norm_author!r}"
-            )
-        if len(candidates) > 1:
-            raise ValueError(
-                f"CWA: ambiguous match for {norm_title!r} — {len(candidates)} candidates"
-            )
-
-        href = candidates[0]
-        async with httpx.AsyncClient(
-            base_url=settings.cwa_url, timeout=httpx.Timeout(10.0, read=300.0)
-        ) as client:
-            async with client.stream(
-                "GET", href, headers=headers, follow_redirects=True
-            ) as resp:
-                resp.raise_for_status()
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                with dest.open("wb") as f:
-                    async for chunk in resp.aiter_bytes(65536):
-                        f.write(chunk)
-
-    async def _download_ebook_from_local(
-        self, dest: Path, item_metadata: dict  # type: ignore[type-arg]
-    ) -> None:
-        import re
-        import unicodedata
-
-        media = item_metadata.get("media", {})
-        title = media.get("metadata", {}).get("title", "")
-        author = media.get("metadata", {}).get("authorName", "")
-
-        def normalize(s: str) -> str:
-            s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
-            return re.sub(r"[^a-z0-9 ]", "", s.lower()).strip()
-
-        norm_title = normalize(title)
-        norm_author = normalize(author)
-        root = Path(settings.ebook_local_root)
-
-        candidates: list[tuple[int, Path]] = []
-        for epub_path in root.rglob("*.epub"):
-            name = normalize(epub_path.stem)
-            parent = normalize(epub_path.parent.name)
-            if name == norm_title:
-                priority = 1 if parent == norm_author else 2
-                candidates.append((priority, epub_path))
-            elif norm_title in normalize(str(epub_path)):
-                candidates.append((3, epub_path))
-
-        if not candidates:
-            raise ValueError(
-                f"No EPUB found in {root} for title={norm_title!r} author={norm_author!r}"
-            )
-
-        candidates.sort(key=lambda x: x[0])
-        best_priority, best_path = candidates[0]
-        if best_priority == 3:
-            logger.warning(
-                "Local EPUB match is fuzzy: %s (title=%r)", best_path, norm_title
-            )
-
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(best_path, dest)
 
     async def _parse_epub(
         self, epub_path: Path

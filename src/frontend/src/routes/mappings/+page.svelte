@@ -2,7 +2,13 @@
 	import { untrack } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
-	import type { AbsItemSummary, EbookFileSummary, MappingRead } from '$lib/api';
+	import type {
+		AbsItemSummary,
+		EbookCandidate,
+		EbookFileSummary,
+		EbookSource,
+		MappingRead,
+	} from '$lib/api';
 	import type { ActionData, PageData } from './$types';
 	import { toaster } from '$lib/toaster';
 
@@ -11,6 +17,11 @@
 	let mappings = $state<MappingRead[]>([]);
 	let selectedAbsItemId = $state<string>('');
 	let selectedEbookPath = $state<string>('');
+	let selectedSource = $state<EbookSource>('local');
+	let selectedCalibreRef = $state<string>('');
+	let calibreCandidates = $state<EbookCandidate[]>([]);
+	let calibreLoading = $state(false);
+	let calibreError = $state<string | null>(null);
 	let showSyncConfirmModal = $state(false);
 	let addFormEl = $state<HTMLFormElement | null>(null);
 
@@ -19,7 +30,9 @@
 	);
 
 	let usedAbsIds = $derived(new Set(mappings.map((m) => m.abs_item_id)));
-	let usedEbookPaths = $derived(new Set(mappings.map((m) => m.ebook_path)));
+	let usedEbookPaths = $derived(
+		new Set(mappings.filter((m) => m.ebook_path).map((m) => m.ebook_path as string))
+	);
 
 	let availableAbsItems = $derived(
 		(data.absItems as AbsItemSummary[]).filter((a) => !usedAbsIds.has(a.abs_item_id))
@@ -104,6 +117,52 @@
 			goto(`/progress?document=${m.kosync_document}`);
 		}
 	}
+
+	async function loadCalibreCandidates(absItemId: string) {
+		if (!absItemId) {
+			calibreCandidates = [];
+			calibreError = null;
+			selectedCalibreRef = '';
+			return;
+		}
+		calibreLoading = true;
+		calibreError = null;
+		selectedCalibreRef = '';
+		try {
+			const res = await fetch(`/mappings/calibre?abs_item_id=${encodeURIComponent(absItemId)}`);
+			if (!res.ok) {
+				const body = await res.json().catch(() => ({}));
+				calibreError = body.error ?? 'Calibre Web request failed';
+				calibreCandidates = [];
+				return;
+			}
+			calibreCandidates = (await res.json()) as EbookCandidate[];
+			if (calibreCandidates.length === 1) {
+				selectedCalibreRef = calibreCandidates[0].ref;
+			}
+		} catch {
+			calibreError = 'Calibre Web request failed';
+			calibreCandidates = [];
+		} finally {
+			calibreLoading = false;
+		}
+	}
+
+	$effect(() => {
+		if (selectedSource === 'calibre') {
+			void loadCalibreCandidates(selectedAbsItemId);
+		} else {
+			calibreCandidates = [];
+			calibreError = null;
+			selectedCalibreRef = '';
+		}
+	});
+
+	let canSubmit = $derived(
+		!!selectedAbsItemId &&
+			((selectedSource === 'local' && !!selectedEbookPath) ||
+				(selectedSource === 'calibre' && !!selectedCalibreRef && !calibreLoading))
+	);
 </script>
 
 <div class="container mx-auto max-w-5xl space-y-8 p-6">
@@ -133,6 +192,8 @@
 						mappings = [result.data.created as MappingRead, ...mappings];
 						selectedAbsItemId = '';
 						selectedEbookPath = '';
+						selectedCalibreRef = '';
+						calibreCandidates = [];
 						startPolling();
 						toaster.create({ type: 'success', title: 'Mapping added — alignment started' });
 					} else {
@@ -145,7 +206,13 @@
 			<input type="hidden" name="abs_item_id" value={selectedAbsItemId} />
 			<input type="hidden" name="abs_title" value={selectedAbs?.title ?? ''} />
 			<input type="hidden" name="abs_author" value={selectedAbs?.author ?? ''} />
-			<input type="hidden" name="ebook_path" value={selectedEbookPath} />
+			<input type="hidden" name="ebook_source" value={selectedSource} />
+			<input type="hidden" name="ebook_path" value={selectedSource === 'local' ? selectedEbookPath : ''} />
+			<input
+				type="hidden"
+				name="ebook_source_ref"
+				value={selectedSource === 'calibre' ? selectedCalibreRef : ''}
+			/>
 
 			<label class="label">
 				<span>ABS Audiobook</span>
@@ -165,27 +232,83 @@
 				{/if}
 			</label>
 
-			<label class="label">
-				<span>Ebook</span>
-				{#if availableEbookFiles.length === 0}
-					<select class="select" disabled>
-						<option>No ebooks found — check EBOOK_LOCAL_ROOT</option>
-					</select>
-				{:else}
-					<select class="select" bind:value={selectedEbookPath}>
-						<option value="">Choose ebook…</option>
-						{#each availableEbookFiles as ebook (ebook.path)}
-							<option value={ebook.path}>{ebookLabel(ebook)}</option>
-						{/each}
-					</select>
-				{/if}
-			</label>
+			<fieldset class="label sm:col-span-2">
+				<legend>Ebook source</legend>
+				<div class="flex gap-4">
+					<label class="flex items-center gap-2">
+						<input
+							type="radio"
+							class="radio"
+							value="local"
+							bind:group={selectedSource}
+						/>
+						<span>Local files</span>
+					</label>
+					<label class="flex items-center gap-2">
+						<input
+							type="radio"
+							class="radio"
+							value="calibre"
+							bind:group={selectedSource}
+						/>
+						<span>Calibre Web</span>
+					</label>
+				</div>
+			</fieldset>
+
+			{#if selectedSource === 'local'}
+				<label class="label sm:col-span-2">
+					<span>Ebook</span>
+					{#if availableEbookFiles.length === 0}
+						<select class="select" disabled>
+							<option>No ebooks found — check EBOOK_LOCAL_ROOT</option>
+						</select>
+					{:else}
+						<select class="select" bind:value={selectedEbookPath}>
+							<option value="">Choose ebook…</option>
+							{#each availableEbookFiles as ebook (ebook.path)}
+								<option value={ebook.path}>{ebookLabel(ebook)}</option>
+							{/each}
+						</select>
+					{/if}
+				</label>
+			{:else}
+				<label class="label sm:col-span-2">
+					<span>Calibre Web ebook</span>
+					{#if calibreLoading}
+						<select class="select" disabled>
+							<option>Searching Calibre Web…</option>
+						</select>
+					{:else if calibreError}
+						<select class="select" disabled>
+							<option>{calibreError}</option>
+						</select>
+					{:else if !selectedAbsItemId}
+						<select class="select" disabled>
+							<option>Pick an audiobook first</option>
+						</select>
+					{:else if calibreCandidates.length === 0}
+						<select class="select" disabled>
+							<option>No match on Calibre Web</option>
+						</select>
+					{:else}
+						<select class="select" bind:value={selectedCalibreRef}>
+							<option value="">Choose ebook…</option>
+							{#each calibreCandidates as c (c.ref)}
+								<option value={c.ref}>
+									{c.title}{c.author ? ` — ${c.author}` : ''}{c.format && c.format !== 'epub' ? ` (${c.format.toUpperCase()})` : ''}
+								</option>
+							{/each}
+						</select>
+					{/if}
+				</label>
+			{/if}
 
 			<div class="flex justify-end sm:col-span-2">
 				<button
 					type="button"
 					class="btn variant-filled-primary"
-					disabled={!selectedAbsItemId || !selectedEbookPath}
+					disabled={!canSubmit}
 					onclick={() => (showSyncConfirmModal = true)}
 				>
 					Add

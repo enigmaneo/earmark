@@ -22,6 +22,8 @@ Project documentation lives in `docs/`:
 - [`docs/KosyncApi.md`](docs/KosyncApi.md) — KOSync API reference
 - [`docs/Frontend.md`](docs/Frontend.md) — Frontend design principles (theming, layout, accessibility)
 - [`docs/AudioBookEbookMapping.md`](docs/AudioBookEbookMapping.md) — Audiobook-ebook mapping and alignment
+- [`docs/AbsEbookMappingUI.md`](docs/AbsEbookMappingUI.md) — Mapping schema, API, and UI reference
+- [`docs/CalibreWebIntegration.md`](docs/CalibreWebIntegration.md) — Calibre Web (OPDS) ebook source
 - [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) — Alignment pipeline testing guide
 - [`docs/Sync.md`](docs/Sync.md) — Bidirectional ABS ↔ KOSync progress sync
 
@@ -41,8 +43,7 @@ Project documentation lives in `docs/`:
 ```bash
 uv python install 3.13         # Python 3.12 or 3.13 (pyproject.toml pins <3.14)
 uv venv --python 3.13          # only if your default uv venv was created on a newer Python
-uv sync                        # core deps only
-uv sync --extra align          # core deps + faster-whisper + torch (~2 GB) — use this for alignment jobs
+uv sync                        # installs all deps including faster-whisper for alignment
 uv run fastapi dev src/earmark/main.py --reload-dir src/earmark   # dev server on :8000
 uv run pytest                  # tests
 uv run ruff check .            # lint
@@ -50,7 +51,7 @@ uv run ruff format .           # format
 uv run mypy src/earmark        # type check
 ```
 
-> **Note:** `pyproject.toml` pins `requires-python = ">=3.12,<3.14"` because PyTorch lacks 3.14 wheels. The `align` extra is only needed when running alignment jobs — the KOSync server, scheduler, and web UI run on core deps alone. Transcription runs `faster-whisper` directly (no wav2vec2 forced-alignment pass); audio is split into chunks and each chunk's words are cached to disk so a restart resumes from the last finished chunk. Tune via env vars: `WHISPER_MODEL` (`tiny.en`), `WHISPER_DEVICE` (`cpu`), `WHISPER_COMPUTE_TYPE` (`int8`), `WHISPER_CPU_THREADS` (`4`), `WHISPER_CHUNK_SECONDS` (`600`), `WHISPER_LANGUAGE` (`en`). See [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) for the full testing guide.
+> **Note:** `pyproject.toml` pins `requires-python = ">=3.12,<3.14"` because `faster-whisper`'s `ctranslate2` / `onnxruntime` dependencies only ship wheels for Python ≤3.13. Transcription runs `faster-whisper` directly (no wav2vec2 forced-alignment pass); audio is split into chunks and each chunk's words are cached to disk so a restart resumes from the last finished chunk. Tune via env vars: `WHISPER_MODEL` (`tiny.en`), `WHISPER_DEVICE` (`cpu`), `WHISPER_COMPUTE_TYPE` (`int8`), `WHISPER_CPU_THREADS` (`4`), `WHISPER_CHUNK_SECONDS` (`600`), `WHISPER_LANGUAGE` (`en`). See [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) for the full testing guide.
 
 ### Frontend (SvelteKit)
 

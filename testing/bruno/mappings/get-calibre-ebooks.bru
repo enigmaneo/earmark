@@ -1,0 +1,29 @@
+meta {
+  name: Get Calibre Ebooks
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{base_url}}/web/calibre-ebooks?abs_item_id={{abs_item_id}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+params:query {
+  abs_item_id: {{abs_item_id}}
+}
+
+docs {
+  Search the configured Calibre Web OPDS server for ebooks that match the
+  audiobook identified by `abs_item_id`. Returns a list of `EbookCandidate`
+  objects with a `ref` (OPDS download href) that can be passed to
+  `POST /web/mappings` as `ebook_source_ref` with `ebook_source="calibre"`.
+
+  Requires `CWA_URL` to be configured. Returns 503 if not configured, 502 if
+  the OPDS server is unreachable.
+}

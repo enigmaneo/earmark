@@ -1,4 +1,9 @@
+import logging
+import os
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -17,7 +22,6 @@ class Settings(BaseSettings):
 
     sync_interval_seconds: int = 300
 
-    ebook_source: str = "abs"  # "abs" | "cwa" | "local"
     cwa_url: str = ""
     cwa_username: str = ""
     cwa_password: str = ""
@@ -38,3 +42,9 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+if os.getenv("EBOOK_SOURCE"):
+    logger.warning(
+        "EBOOK_SOURCE is set but no longer read. Source is now chosen per mapping; "
+        "see docs/CalibreWebIntegration.md."
+    )

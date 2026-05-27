@@ -57,16 +57,33 @@ export const actions: Actions = {
 		const abs_item_id = formData.get('abs_item_id') as string;
 		const abs_title = formData.get('abs_title') as string;
 		const abs_author = (formData.get('abs_author') as string) || null;
-		const ebook_path = formData.get('ebook_path') as string;
+		const ebook_source = ((formData.get('ebook_source') as string) || 'local') as
+			| 'local'
+			| 'calibre';
+		const ebook_path = (formData.get('ebook_path') as string) || null;
+		const ebook_source_ref = (formData.get('ebook_source_ref') as string) || null;
 
-		if (!abs_item_id || !abs_title || !ebook_path) {
-			return fail(400, { error: 'All fields are required' });
+		if (!abs_item_id || !abs_title) {
+			return fail(400, { error: 'Audiobook is required' });
+		}
+		if (ebook_source === 'local' && !ebook_path) {
+			return fail(400, { error: 'Pick a local ebook file' });
+		}
+		if (ebook_source === 'calibre' && !ebook_source_ref) {
+			return fail(400, { error: 'Pick a Calibre Web ebook' });
 		}
 
 		const res = await fetch(`${BACKEND}/web/mappings`, {
 			method: 'POST',
 			headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-			body: JSON.stringify({ abs_item_id, abs_title, abs_author, ebook_path }),
+			body: JSON.stringify({
+				abs_item_id,
+				abs_title,
+				abs_author,
+				ebook_source,
+				ebook_path,
+				ebook_source_ref,
+			}),
 		});
 
 		if (res.status === 409) return fail(409, { error: 'This mapping already exists' });

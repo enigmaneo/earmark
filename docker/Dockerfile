@@ -3,9 +3,8 @@
 ###############################################################################
 # Backend – dependency builder (faster-whisper alignment engine)
 ###############################################################################
-# The 'align' extra requires Python ≤3.13 (ctranslate2 / onnxruntime wheel
-# matrix) and pulls in faster-whisper + its inference deps (ctranslate2, av,
-# onnxruntime, huggingface-hub).
+# Pins Python ≤3.13 — faster-whisper's ctranslate2 / onnxruntime deps ship
+# wheels only for that range.
 FROM python:3.13-slim AS backend-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,9 +19,6 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 ENV PATH="/app/.venv/bin:$PATH"
-
-# Install alignment extra (faster-whisper). Skip if you'll never run alignment.
-RUN uv pip install -e ".[align]"
 
 COPY src/earmark ./src/earmark
 RUN uv pip install --no-deps .

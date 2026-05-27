@@ -35,9 +35,11 @@ EBOOK_LOCAL_ROOT=.
 | `abs_item_id` | VARCHAR(255) INDEX | ABS item ID (e.g. `li_abc123`) |
 | `abs_title` | VARCHAR(500) | Cached from ABS API at create time |
 | `abs_author` | VARCHAR(500) nullable | Cached from ABS API at create time |
-| `ebook_path` | VARCHAR(1000) | Path relative to `ebook_local_root` |
-| `ebook_filename` | VARCHAR(500) | Basename of the ebook file (for display) |
-| `kosync_document` | VARCHAR(64) nullable INDEX | MD5 hex digest of the ebook file content |
+| `ebook_source` | VARCHAR(20) | `"local"` or `"calibre"`; server default `"local"` |
+| `ebook_path` | VARCHAR(1000) nullable | For `local`: path relative to `ebook_local_root`. Null for `calibre`. |
+| `ebook_filename` | VARCHAR(500) nullable | Basename of the local ebook file (for display). Null for `calibre`. |
+| `ebook_source_ref` | VARCHAR(1000) nullable | For `calibre`: OPDS download href. Null for `local`. |
+| `kosync_document` | VARCHAR(64) nullable INDEX | MD5 hex digest of the local ebook file content; null for `calibre` mappings |
 | `created_at` | DATETIME | Server default |
 
 ### Table: `ebook_metadata_cache`
@@ -71,7 +73,7 @@ class EbookMetadataCache(Base):
 
 **User scoping:** `user_id` is a FK to `users.id`. All API endpoints filter by the authenticated user — a user can only see and manage their own mappings. This follows the same pattern as `KosyncUser.user_id`.
 
-**Uniqueness:** `(user_id, abs_item_id, ebook_path)` is enforced at the application layer (HTTP 409) rather than as a DB constraint, to avoid migration complexity with SQLite.
+**Uniqueness:** enforced at the application layer (HTTP 409). For `local` mappings the check is `(user_id, abs_item_id, ebook_source, ebook_path)`; for `calibre` mappings it is `(user_id, abs_item_id, ebook_source, ebook_source_ref)`.
 
 **Back-reference on `User`:**
 ```python
@@ -89,15 +91,17 @@ class AbsEbookMapping(Base):
     abs_item_id: Mapped[str] = mapped_column(String(255), index=True)
     abs_title: Mapped[str] = mapped_column(String(500))
     abs_author: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    ebook_path: Mapped[str] = mapped_column(String(1000))
-    ebook_filename: Mapped[str] = mapped_column(String(500))
+    ebook_source: Mapped[str] = mapped_column(String(20), server_default="local")
+    ebook_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    ebook_filename: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    ebook_source_ref: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     kosync_document: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="ebook_mappings")
 ```
 
-`init_db()` calls `Base.metadata.create_all`, so the table is created automatically on first startup — no migration tooling needed.
+`init_db()` calls `Base.metadata.create_all`, so the table is created automatically on first startup — no migration tooling needed. For existing SQLite databases predating the source-selection feature, `init_db()` also runs a small list of idempotent `ALTER TABLE` statements (see `src/earmark/database.py`) to add `ebook_source` and `ebook_source_ref`.
 
 ---
 
@@ -208,6 +212,37 @@ The upsert and stale-entry cleanup happen in a single DB session after the scan 
 
 ---
 
+### `GET /web/calibre-ebooks`
+
+Searches the configured Calibre Web OPDS server for ebooks matching an ABS audiobook. Used by the mapping UI when the user selects the *Calibre Web* source.
+
+**Query parameters:**
+- `abs_item_id` (required) — the ABS item to look up
+
+**Resolution:** the backend reads the audiobook's title and author (via the ABS API if configured, else from the `abs_library_items` table) and calls `CalibreOpdsSource.search(title, author)` (`src/earmark/services/ebook_sources/calibre.py`). See [CalibreWebIntegration.md](CalibreWebIntegration.md) for the OPDS protocol details.
+
+**Status codes:**
+- `200` — list of `EbookCandidate` objects (may be empty if there is no match).
+- `404` — unknown `abs_item_id`.
+- `503` — `CWA_URL` is not configured.
+- `502` — the OPDS server is unreachable.
+
+**Response schema: `EbookCandidate`**
+```json
+[
+  {
+    "ref": "/opds/download/42/name-of-the-wind.epub",
+    "title": "The Name of the Wind",
+    "author": "Patrick Rothfuss",
+    "format": "epub"
+  }
+]
+```
+
+`ref` is passed back to `POST /web/mappings` as `ebook_source_ref` when creating a `calibre` mapping.
+
+---
+
 ### `GET /web/mappings`
 
 Returns all mappings owned by the authenticated user, ordered newest first.
@@ -218,23 +253,37 @@ Returns all mappings owned by the authenticated user, ordered newest first.
 
 ### `POST /web/mappings`
 
-Creates a new mapping.
+Creates a new mapping. The shape of the body depends on `ebook_source`.
 
-**Request body:**
+**Local source:**
 ```json
 {
   "abs_item_id": "li_abc123",
   "abs_title": "The Name of the Wind",
   "abs_author": "Patrick Rothfuss",
+  "ebook_source": "local",
   "ebook_path": "fantasy/name-of-the-wind.epub"
 }
 ```
 
+**Calibre Web source:**
+```json
+{
+  "abs_item_id": "li_abc123",
+  "abs_title": "The Name of the Wind",
+  "abs_author": "Patrick Rothfuss",
+  "ebook_source": "calibre",
+  "ebook_source_ref": "/opds/download/42/name-of-the-wind.epub"
+}
+```
+
+`ebook_source_ref` is the OPDS download href returned by `GET /web/calibre-ebooks`.
+
 **Behavior:**
-1. Check for existing mapping with same `(user_id, abs_item_id, ebook_path)` → 409 if found.
-2. Resolve `ebook_local_root / ebook_path`.
-3. If the file exists: compute MD5, store as `kosync_document`.
-4. If the file is missing: store `kosync_document = null`, continue without error.
+1. Validate per-source fields: `local` requires `ebook_path`; `calibre` requires `ebook_source_ref`. 422 if missing.
+2. Check for an existing mapping with the same `(user_id, abs_item_id, ebook_source, …)` tuple → 409.
+3. For `local`: resolve `ebook_local_root / ebook_path`, compute the kosync MD5, store as `kosync_document`. 500 if the file cannot be read.
+4. For `calibre`: `kosync_document` is left null (the file is fetched at alignment time).
 5. Persist and return the created mapping.
 
 **Response:** `201 Created` with the new `MappingRead`.
@@ -269,11 +318,20 @@ class EbookFileSummary(BaseModel):
     author: str | None = None
 
 
+class EbookCandidate(BaseModel):
+    ref: str           # OPDS download href (calibre) or relative path (local search results)
+    title: str
+    author: str | None = None
+    format: str = "epub"
+
+
 class MappingCreate(BaseModel):
     abs_item_id: str
     abs_title: str
     abs_author: str | None = None
-    ebook_path: str
+    ebook_source: str = "local"          # "local" | "calibre"
+    ebook_path: str | None = None        # required when ebook_source == "local"
+    ebook_source_ref: str | None = None  # required when ebook_source == "calibre"
 
 
 class MappingRead(BaseModel):
@@ -282,8 +340,10 @@ class MappingRead(BaseModel):
     abs_item_id: str
     abs_title: str
     abs_author: str | None
-    ebook_path: str
-    ebook_filename: str
+    ebook_source: str
+    ebook_path: str | None
+    ebook_filename: str | None
+    ebook_source_ref: str | None
     kosync_document: str | None
     created_at: datetime
 
@@ -312,14 +372,25 @@ export interface EbookFileSummary {
     author: string | null;
 }
 
+export type EbookSource = 'local' | 'calibre';
+
+export interface EbookCandidate {
+    ref: string;
+    title: string;
+    author: string | null;
+    format: string;
+}
+
 export interface MappingRead {
     id: number;
     user_id: number;
     abs_item_id: string;
     abs_title: string;
     abs_author: string | null;
-    ebook_path: string;
-    ebook_filename: string;
+    ebook_source: EbookSource;
+    ebook_path: string | null;
+    ebook_filename: string | null;
+    ebook_source_ref: string | null;
     kosync_document: string | null;
     created_at: string;
 }
@@ -329,11 +400,12 @@ export interface MappingRead {
 
 - Read `earmark_session` cookie; redirect to `/login` if missing.
 - Load `absItems`, `ebookFiles`, and `mappings` in parallel via `Promise.all`.
-- Two form actions:
-  - `createMapping` — POST JSON to `/web/mappings`
+- Form actions:
+  - `createMapping` — POST JSON to `/web/mappings`. Reads `ebook_source` from the form and forwards `ebook_path` (local) or `ebook_source_ref` (calibre).
   - `deleteMapping` — DELETE to `/web/mappings/{id}`
+  - `syncMapping` — POST to `/web/mappings/{id}/sync`
 
-Follow the same pattern as the root `+page.server.ts`.
+Calibre candidates are fetched client-side via `GET /mappings/calibre?abs_item_id=…`, a SvelteKit `+server.ts` that proxies to the backend with the session token attached.
 
 ### `+page.svelte` — UI Layout
 
@@ -343,12 +415,18 @@ AppBar: earmark | [Mappings]  user@email  Sign out
 ┌───────────────────────────────────────────────────────────────┐
 │ Add Mapping                                                   │
 │                                                               │
-│  ABS Audiobook                   Ebook                        │
-│  ┌──────────────────────────┐   ┌──────────────────────────┐  │
-│  │ Choose audiobook…      ▾ │   │ Choose ebook…          ▾ │  │
-│  │ Name of the Wind         │   │ The Name of the Wind     │  │
-│  │   — P. Rothfuss          │   │   — P. Rothfuss          │  │
-│  └──────────────────────────┘   └──────────────────────────┘  │
+│  ABS Audiobook                                                │
+│  ┌──────────────────────────┐                                 │
+│  │ Choose audiobook…      ▾ │                                 │
+│  └──────────────────────────┘                                 │
+│                                                               │
+│  Ebook source                                                 │
+│   (•) Local files    ( ) Calibre Web                          │
+│                                                               │
+│  Ebook  ← shows Local picker OR Calibre candidates            │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │ Choose ebook…                                          ▾ │ │
+│  └──────────────────────────────────────────────────────────┘ │
 │                                                    [ Add ]    │
 └───────────────────────────────────────────────────────────────┘
 
@@ -362,12 +440,13 @@ AppBar: earmark | [Mappings]  user@email  Sign out
 
 **Behaviour:**
 - Selecting an ABS item reactively populates hidden form fields (`abs_title`, `abs_author`).
-- "Add" button is disabled until both dropdowns have a selection.
+- The **Ebook source** radio group toggles between `local` and `calibre` (defaults to `local`).
+- **Local mode**: the ebook dropdown is populated from `/web/ebook-files`. Option label is `"{title}" — {author}` when metadata is available, otherwise the filename. Empty list shows a disabled "No ebooks found — check EBOOK_LOCAL_ROOT".
+- **Calibre mode**: when an ABS audiobook is selected, the page calls `GET /mappings/calibre?abs_item_id=…`. While the request is in flight the dropdown shows "Searching Calibre Web…". On success the matching candidates are listed; if there is exactly one candidate it is pre-selected. Empty result shows "No match on Calibre Web"; transport errors show the backend error message.
+- "Add" button is disabled until the audiobook **and** an ebook (local file or Calibre candidate) are selected, and while Calibre search is loading.
 - On successful create, the new row is appended to the table via `use:enhance` without a full page reload.
 - "Remove" deletes the row inline (no confirmation dialog — the mapping can always be recreated).
 - Empty ABS dropdown: single disabled option "No audiobooks found".
-- Ebook dropdown option label: `"{title}" — {author}` when metadata is available, otherwise the filename.
-- Empty ebook dropdown: single disabled option "No ebooks found — check EBOOK_LOCAL_ROOT".
 - Duplicate mapping attempt: inline error message above the form.
 
 ### Navigation
