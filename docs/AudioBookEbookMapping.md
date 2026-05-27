@@ -207,89 +207,55 @@ For batch alignment runs, filter items where `media.ebookFile != null` (ABS-atta
 
 ## 4. Ebook Sourcing
 
-The ebook can come from three sources, selected by `ebook_source` in `earmark/config.py`. The pipeline resolves the source before the `fetching_ebook` stage and always deposits the result at `.cache/earmark/{item_id}/ebook.epub`.
+The ebook for a mapping comes from one of two sources, chosen **per mapping** in the UI and stored on the `AbsEbookMapping` row as `ebook_source`:
+
+- `"local"` — a file under `ebook_local_root` on disk (the default).
+- `"calibre"` — an ebook fetched from a Calibre Web OPDS server, identified by the OPDS download href in `ebook_source_ref`.
+
+The pipeline resolves the source before the `fetching_ebook` stage and always deposits the result at `.cache/earmark/{item_id}/ebook.epub`. Dispatch lives in `AlignmentPipeline._fetch_ebook_from_source` (`src/earmark/services/alignment.py`) and delegates to the implementations in `src/earmark/services/ebook_sources/`. See [CalibreWebIntegration.md](CalibreWebIntegration.md) for the design.
 
 ```python
-ebook_source: str = "abs"      # "abs" | "cwa" | "local"
-cwa_url: str = ""              # base URL of Calibre-Web instance
+# earmark/config.py
+cwa_url: str = ""              # base URL of Calibre Web (OPDS)
 cwa_username: str = ""
 cwa_password: str = ""
-ebook_local_root: str = ""     # root directory when ebook_source = "local"
+ebook_local_root: str = "."    # root directory scanned for local ebooks
 ```
 
-### Mode A — ABS-attached ebook (`ebook_source = "abs"`, default)
+> **Removed:** the old `EBOOK_SOURCE` global env var no longer exists. If it is still set in your environment the app logs a deprecation warning at startup and ignores it. There is also a fallback `ABS-attached` path used only by CLI/legacy alignment jobs that have no mapping; mapping-driven jobs always go through `local` or `calibre`.
 
-The ABS item carries the ebook directly. Check `media.ebookFile` in the item metadata response:
+### Mode A — Local filesystem (`ebook_source = "local"`)
 
-```json
-"ebookFile": {
-  "filename": "tale-of-two-cities.epub",
-  "ext": ".epub"
-}
-```
+The EPUB already exists on a drive accessible to earmark, under `ebook_local_root`. The user picks the file in the mapping UI; the chosen path (relative to the root) is stored on the mapping as `ebook_path`.
 
-If present, download with:
+At alignment time the pipeline copies `ebook_local_root / ebook_path` to `.cache/earmark/{item_id}/ebook.epub`. The source file is never modified.
 
-```
-GET /api/items/{item_id}/ebook
-Authorization: Bearer {api_key}
-```
+`LocalEbookSource.search()` (used by the UI's local listing fallback and the CLI flow without an explicit path) walks `ebook_local_root` and ranks candidates against the ABS item's `title`/`authorName` (lowercased, punctuation stripped):
 
-Stream the response body to `.cache/earmark/{item_id}/ebook.epub`. If `ebookFile` is `null`, fail the job immediately — do not fall through to another source.
+1. Filename matches normalized title exactly **and** parent directory matches normalized author
+2. Filename matches normalized title exactly
+3. Any path component contains the normalized title (fallback)
 
-### Mode B — Calibre-Web / CWA (`ebook_source = "cwa"`)
+### Mode B — Calibre Web OPDS (`ebook_source = "calibre"`)
 
-Calibre-Web does not expose a traditional REST API. The pipeline uses its OPDS feed for discovery and its web download route for retrieval.
+Calibre Web does not expose a traditional REST API. The pipeline uses its OPDS feed for both discovery and download.
 
-**Step 1 — Authenticate and get a session cookie**
+**Step 1 — Discovery (frontend, before mapping creation)**
 
-```
-POST /login
-Content-Type: application/x-www-form-urlencoded
-
-username={cwa_username}&password={cwa_password}
-```
-
-Store the returned session cookie. It is reused for all subsequent requests in this pipeline run.
-
-**Step 2 — Search via OPDS**
+The mapping UI calls `GET /web/calibre-ebooks?abs_item_id=…`. The backend resolves the audiobook's title/author (via ABS if configured, falling back to the `abs_library_items` table) and queries the OPDS server:
 
 ```
 GET /opds/search/{normalized_title}
 Authorization: Basic base64({cwa_username}:{cwa_password})
 ```
 
-Returns an Atom XML feed. Each `<entry>` contains:
-- `<title>` — book title
-- `<author><name>` — author name
-- `<link rel="http://opds-spec.org/acquisition" type="application/epub+zip" href="/get/EPUB/{book_id}/...">` — EPUB download URL
+The Atom XML feed is parsed by `_parse_opds_feed`. Matching is permissive (see [CalibreWebIntegration.md § 7](CalibreWebIntegration.md) for the full rules): multi-author entries pass on any author overlap; titles match via exact equality, series-prefix-stripped substring, or significant-token-set subset. Every `<link rel="http://opds-spec.org/acquisition">` becomes a candidate; the `format` field is derived from the MIME type and EPUB candidates sort first. The user picks one candidate; its `ref` is persisted on the mapping as `ebook_source_ref`.
 
-Parse entries, normalize titles (lowercase, strip punctuation), and find the entry matching the ABS item's `title` and `authorName`. Extract `{book_id}` from the acquisition link `href`.
+**Step 2 — Download (alignment job)**
 
-**Matching rule:** Require an exact normalized-title match. If zero or multiple matches are found, log all candidates and fail the job — do not guess.
+At alignment time `CalibreOpdsSource.fetch(ref, dest)` streams the EPUB from `{cwa_url}{ref}` with the same Basic auth, writing it to `.cache/earmark/{item_id}/ebook.epub`.
 
-**Step 3 — Download the EPUB**
-
-```
-GET /get/EPUB/{book_id}/{title}.epub
-Cookie: session={session_cookie}
-```
-
-Stream to `.cache/earmark/{item_id}/ebook.epub`.
-
-### Mode C — Local filesystem (`ebook_source = "local"`)
-
-The EPUB already exists on a drive accessible to earmark.
-
-**Discovery:** Walk `ebook_local_root` recursively and collect all `.epub` files. Normalize both the candidate filenames/parent directory names and the ABS item's `title`/`authorName` (lowercase, strip punctuation and articles). Apply matching in priority order:
-
-1. Filename matches normalized title exactly
-2. Parent directory matches normalized author AND filename matches normalized title
-3. Any path component contains the normalized title (fallback — log a warning)
-
-The highest-priority match wins. If no match is found, fail the job with an error message listing the search terms used.
-
-**Caching:** Copy the matched file to `.cache/earmark/{item_id}/ebook.epub`. The source file is never modified.
+**Error handling:** `GET /web/calibre-ebooks` returns 503 if `CWA_URL` is unset, 502 if the OPDS server is unreachable, and 404 if the ABS item cannot be resolved.
 
 ---
 

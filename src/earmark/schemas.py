@@ -135,11 +135,20 @@ class EbookFileSummary(BaseModel):
     author: str | None = None
 
 
+class EbookCandidate(BaseModel):
+    ref: str
+    title: str
+    author: str | None = None
+    format: str = "epub"
+
+
 class MappingCreate(BaseModel):
     abs_item_id: str
     abs_title: str
     abs_author: str | None = None
-    ebook_path: str
+    ebook_source: str = "local"
+    ebook_path: str | None = None
+    ebook_source_ref: str | None = None
 
 
 class MappingRead(BaseModel):
@@ -148,8 +157,10 @@ class MappingRead(BaseModel):
     abs_item_id: str
     abs_title: str
     abs_author: str | None
-    ebook_path: str
-    ebook_filename: str
+    ebook_source: str
+    ebook_path: str | None
+    ebook_filename: str | None
+    ebook_source_ref: str | None
     kosync_document: str | None
     created_at: datetime
     alignment_job_id: int | None = None

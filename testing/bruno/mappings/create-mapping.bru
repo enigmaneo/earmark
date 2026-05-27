@@ -19,6 +19,16 @@ body:json {
     "abs_item_id": "{{abs_item_id}}",
     "abs_title": "Test Book",
     "abs_author": "Test Author",
+    "ebook_source": "local",
     "ebook_path": "test.epub"
   }
+}
+
+docs {
+  Create a mapping between an ABS audiobook and an ebook.
+
+  `ebook_source` is `"local"` or `"calibre"`.
+  - For `local`: provide `ebook_path` (path relative to EBOOK_LOCAL_ROOT).
+  - For `calibre`: provide `ebook_source_ref` (the OPDS download href from
+    `GET /web/calibre-ebooks`).
 }

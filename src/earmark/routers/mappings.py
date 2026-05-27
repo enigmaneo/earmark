@@ -11,11 +11,20 @@ from earmark.config import settings
 from earmark.database import get_session
 from earmark.earmark_auth import get_current_earmark_user
 from earmark.models import AbsEbookMapping, AbsLibraryItem, AlignmentJob, EbookMetadataCache, KosyncUser, ReadingProgress, User
-from earmark.schemas import AbsItemSummary, EbookFileSummary, MappingCreate, MappingRead
+from earmark.schemas import (
+    AbsItemSummary,
+    EbookCandidate,
+    EbookFileSummary,
+    MappingCreate,
+    MappingRead,
+)
 from earmark.utils import partial_md5
 from earmark.services.alignment import ACTIVE_STATUSES, run_alignment_job
-from earmark.services.progress import backfill_progress_titles
 from earmark.services.audiobookshelf import AudiobookshelfClient
+from earmark.services.ebook_sources import CalibreOpdsSource
+from earmark.services.progress import backfill_progress_titles
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +54,10 @@ def _mapping_to_schema(
         abs_item_id=m.abs_item_id,
         abs_title=m.abs_title,
         abs_author=m.abs_author,
+        ebook_source=m.ebook_source,
         ebook_path=m.ebook_path,
         ebook_filename=m.ebook_filename,
+        ebook_source_ref=m.ebook_source_ref,
         kosync_document=m.kosync_document,
         created_at=m.created_at,
         alignment_job_id=job.id if job else None,
@@ -268,37 +279,108 @@ async def list_mappings(
     ]
 
 
+@router.get("/calibre-ebooks", response_model=list[EbookCandidate])
+async def list_calibre_ebooks(
+    abs_item_id: str,
+    _user: User = Depends(get_current_earmark_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[EbookCandidate]:
+    if not settings.cwa_url:
+        raise HTTPException(
+            status_code=503, detail="Calibre Web is not configured (CWA_URL is unset)."
+        )
+
+    title: str = ""
+    author: str | None = None
+    if settings.audiobookshelf_url and settings.audiobookshelf_api_key:
+        client = AudiobookshelfClient()
+        try:
+            item = await client.get_item(abs_item_id)
+            metadata = item.get("media", {}).get("metadata", {})
+            title = metadata.get("title", "")
+            author = metadata.get("authorName") or None
+        except Exception:
+            logger.error("Failed to fetch ABS item %s", abs_item_id, exc_info=True)
+        finally:
+            await client.close()
+
+    if not title:
+        lib_result = await session.execute(
+            select(AbsLibraryItem).where(AbsLibraryItem.abs_item_id == abs_item_id)
+        )
+        lib_item = lib_result.scalar_one_or_none()
+        if lib_item is not None:
+            title = lib_item.title
+            author = lib_item.author or author
+
+    if not title:
+        raise HTTPException(status_code=404, detail="Unknown ABS item")
+
+    source = CalibreOpdsSource()
+    try:
+        return await source.search(title, author)
+    except httpx.HTTPError:
+        logger.error("Calibre Web OPDS request failed", exc_info=True)
+        raise HTTPException(status_code=502, detail="Calibre Web is unreachable")
+
+
 @router.post("/mappings", response_model=MappingRead, status_code=201)
 async def create_mapping(
     body: MappingCreate,
     user: User = Depends(get_current_earmark_user),
     session: AsyncSession = Depends(get_session),
 ) -> MappingRead:
-    existing = await session.execute(
-        select(AbsEbookMapping).where(
-            AbsEbookMapping.user_id == user.id,
-            AbsEbookMapping.abs_item_id == body.abs_item_id,
-            AbsEbookMapping.ebook_path == body.ebook_path,
-        )
+    if body.ebook_source not in ("local", "calibre"):
+        raise HTTPException(status_code=422, detail="Unknown ebook_source")
+
+    if body.ebook_source == "local":
+        if not body.ebook_path:
+            raise HTTPException(
+                status_code=422, detail="ebook_path is required for local mapping"
+            )
+    else:
+        if not body.ebook_source_ref:
+            raise HTTPException(
+                status_code=422, detail="ebook_source_ref is required for calibre mapping"
+            )
+
+    existing_query = select(AbsEbookMapping).where(
+        AbsEbookMapping.user_id == user.id,
+        AbsEbookMapping.abs_item_id == body.abs_item_id,
+        AbsEbookMapping.ebook_source == body.ebook_source,
     )
+    if body.ebook_source == "local":
+        existing_query = existing_query.where(AbsEbookMapping.ebook_path == body.ebook_path)
+    else:
+        existing_query = existing_query.where(
+            AbsEbookMapping.ebook_source_ref == body.ebook_source_ref
+        )
+
+    existing = await session.execute(existing_query)
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=409, detail="Mapping already exists")
 
-    full_path = Path(settings.ebook_local_root) / body.ebook_path
     kosync_document: str | None = None
-    try:
-        kosync_document = await asyncio.to_thread(partial_md5, full_path)
-    except OSError:
-        logger.error("Cannot read ebook file: %s", full_path, exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not read ebook file")
+    ebook_filename: str | None = None
+    if body.ebook_source == "local":
+        assert body.ebook_path is not None
+        full_path = Path(settings.ebook_local_root) / body.ebook_path
+        try:
+            kosync_document = await asyncio.to_thread(partial_md5, full_path)
+        except OSError:
+            logger.error("Cannot read ebook file: %s", full_path, exc_info=True)
+            raise HTTPException(status_code=500, detail="Could not read ebook file")
+        ebook_filename = Path(body.ebook_path).name
 
     mapping = AbsEbookMapping(
         user_id=user.id,
         abs_item_id=body.abs_item_id,
         abs_title=body.abs_title,
         abs_author=body.abs_author,
+        ebook_source=body.ebook_source,
         ebook_path=body.ebook_path,
-        ebook_filename=Path(body.ebook_path).name,
+        ebook_filename=ebook_filename,
+        ebook_source_ref=body.ebook_source_ref,
         kosync_document=kosync_document,
     )
     session.add(mapping)
@@ -365,7 +447,14 @@ async def sync_mapping(
     if any_active.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Another sync is already running")
 
-    job = AlignmentJob(abs_item_id=mapping.abs_item_id, status="pending", progress=0, ebook_path=mapping.ebook_path)
+    job = AlignmentJob(
+        abs_item_id=mapping.abs_item_id,
+        status="pending",
+        progress=0,
+        ebook_path=mapping.ebook_path,
+        ebook_source=mapping.ebook_source,
+        ebook_source_ref=mapping.ebook_source_ref,
+    )
     session.add(job)
     await session.flush()
     mapping.alignment_job_id = job.id

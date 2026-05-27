@@ -22,6 +22,8 @@ Project documentation lives in `docs/`:
 - [`docs/KosyncApi.md`](docs/KosyncApi.md) — KOSync API reference
 - [`docs/Frontend.md`](docs/Frontend.md) — Frontend design principles (theming, layout, accessibility)
 - [`docs/AudioBookEbookMapping.md`](docs/AudioBookEbookMapping.md) — Audiobook-ebook mapping and alignment
+- [`docs/AbsEbookMappingUI.md`](docs/AbsEbookMappingUI.md) — Mapping schema, API, and UI reference
+- [`docs/CalibreWebIntegration.md`](docs/CalibreWebIntegration.md) — Calibre Web (OPDS) ebook source
 - [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) — Alignment pipeline testing guide
 - [`docs/Sync.md`](docs/Sync.md) — Bidirectional ABS ↔ KOSync progress sync
 

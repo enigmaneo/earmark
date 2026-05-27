@@ -107,7 +107,7 @@ All downloaded and intermediate files are stored under `.cache/earmark/<item-id>
 ```
 .cache/earmark/<item-id>/
   audio/             ← downloaded MP3/M4B files (zero-padded index prefix)
-  ebook.epub         ← (only when ebook_source=abs; skipped when --ebook-file is used)
+  ebook.epub         ← copied from the mapping's source (local or Calibre OPDS); skipped when --ebook-file is used
   chunks/<model>_<chunk_seconds>_<lang>/
     0000.json        ← per-chunk word lists; restart-resumable; cleaned up on success
     0001.json

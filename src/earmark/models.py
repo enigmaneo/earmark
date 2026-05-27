@@ -89,6 +89,8 @@ class AlignmentJob(Base):
     fragment_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     audio_offset_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     ebook_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    ebook_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    ebook_source_ref: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -107,8 +109,10 @@ class AbsEbookMapping(Base):
     abs_item_id: Mapped[str] = mapped_column(String(255), index=True)
     abs_title: Mapped[str] = mapped_column(String(500))
     abs_author: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    ebook_path: Mapped[str] = mapped_column(String(1000))
-    ebook_filename: Mapped[str] = mapped_column(String(500))
+    ebook_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    ebook_filename: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    ebook_source: Mapped[str] = mapped_column(String(20), server_default="local")
+    ebook_source_ref: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     kosync_document: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     alignment_job_id: Mapped[int | None] = mapped_column(
         ForeignKey("alignment_jobs.id"), nullable=True, index=True

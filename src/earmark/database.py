@@ -22,6 +22,10 @@ async def init_db() -> None:
         # Stopgap migration for additive columns (no alembic wired up yet).
         for stmt in (
             "ALTER TABLE alignment_jobs ADD COLUMN warnings TEXT",
+            "ALTER TABLE alignment_jobs ADD COLUMN ebook_source VARCHAR(20)",
+            "ALTER TABLE alignment_jobs ADD COLUMN ebook_source_ref VARCHAR(1000)",
+            "ALTER TABLE abs_ebook_mappings ADD COLUMN ebook_source VARCHAR(20) NOT NULL DEFAULT 'local'",
+            "ALTER TABLE abs_ebook_mappings ADD COLUMN ebook_source_ref VARCHAR(1000)",
         ):
             try:
                 await conn.exec_driver_sql(stmt)
