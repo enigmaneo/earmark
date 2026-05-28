@@ -28,6 +28,8 @@ AUDIOBOOKSHELF_API_KEY=your_api_key_here
 SYNC_INTERVAL_SECONDS=300
 ```
 
+Timestamps are always stored in UTC. The `TIMEZONE` env var (default `America/New_York`, any IANA name) only controls how the web UI renders them — change it and restart to switch the displayed zone without touching data.
+
 ### 2. Backend
 
 Requires Python 3.12 or 3.13 (PyTorch has no Python 3.14 wheels yet) and [uv](https://github.com/astral-sh/uv).

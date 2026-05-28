@@ -47,7 +47,10 @@
 	}
 
 	function formatDate(iso: string): string {
-		return new Date(iso).toLocaleDateString();
+		return new Intl.DateTimeFormat(undefined, {
+			timeZone: data.timezone,
+			dateStyle: 'medium',
+		}).format(new Date(iso));
 	}
 
 	const ACTIVE_STATUSES = new Set([

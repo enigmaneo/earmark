@@ -1,3 +1,4 @@
+from datetime import UTC
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -5,6 +6,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from earmark.auth import get_current_user
+from earmark.config import settings
 from earmark.database import get_session
 from earmark.earmark_auth import get_current_earmark_user
 from earmark.models import KosyncUser, ReadingProgress, User
@@ -27,7 +29,7 @@ def _to_response(r: ReadingProgress) -> ProgressResponse:
         percentage=r.percentage,
         device=r.device,
         device_id=r.device_id,
-        timestamp=int(r.updated_at.timestamp()),
+        timestamp=int(r.updated_at.replace(tzinfo=UTC).timestamp()),
     )
 
 
@@ -39,7 +41,7 @@ def _to_list_item(r: ReadingProgress) -> ProgressListItem:
         percentage=r.percentage,
         device=r.device,
         device_id=r.device_id,
-        timestamp=int(r.updated_at.timestamp()),
+        timestamp=int(r.updated_at.replace(tzinfo=UTC).timestamp()),
         filename=r.filename,
         title=r.title,
         authors=r.authors,
@@ -157,6 +159,11 @@ _SORT_COLUMNS = {
 }
 
 web_router = APIRouter(prefix="/web", tags=["web"])
+
+
+@web_router.get("/config")
+async def web_config() -> dict[str, str]:
+    return {"timezone": settings.timezone}
 
 
 @web_router.get("/documents", response_model=list[DocumentSummary])

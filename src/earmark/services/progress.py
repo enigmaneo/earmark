@@ -1,10 +1,8 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import UTC, datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from earmark.config import settings
 from earmark.models import AbsEbookMapping, ReadingProgress
 
 
@@ -106,7 +104,7 @@ async def write_reading_progress(
         authors=authors,
         filename=filename,
         is_latest=True,
-        updated_at=updated_at or datetime.now(ZoneInfo(settings.timezone)),
+        updated_at=updated_at or datetime.now(UTC),
     )
     session.add(record)
     await session.commit()
