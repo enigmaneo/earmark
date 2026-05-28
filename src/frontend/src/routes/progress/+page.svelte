@@ -147,7 +147,7 @@
 		role="dialog"
 		aria-modal="true"
 	>
-		<div class="card bg-surface-100-800 w-full max-w-md space-y-4 p-6 shadow-xl">
+		<div class="card bg-surface-100-900 w-full max-w-md space-y-4 p-6 shadow-xl">
 			<h3 class="h3">Delete entry?</h3>
 			<p class="text-surface-600-400">
 				This will permanently remove this progress entry. It cannot be undone.
@@ -167,11 +167,11 @@
 					method="POST"
 					action="?/deleteRecord"
 					use:enhance={() => {
-						return async ({ result, update, invalidateAll }) => {
+						return async ({ result, update }) => {
 							if (result.type === 'success' && result.data?.deleted) {
 								pendingDelete = null;
 								deleteError = null;
-								await invalidateAll();
+								await update();
 							} else {
 								deleteError = 'Failed to delete. Please try again.';
 								await update();
