@@ -4,7 +4,6 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
-from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
@@ -129,7 +128,7 @@ async def _write_abs_to_kosync(
             mapping.abs_item_id, new_pct, min_percentage,
         )
         return
-    abs_updated_at = datetime.fromtimestamp(abs_data["lastUpdate"] / 1000, tz=UTC).astimezone(ZoneInfo(settings.timezone))
+    abs_updated_at = datetime.fromtimestamp(abs_data["lastUpdate"] / 1000, tz=UTC)
     mapping.last_synced_at = datetime.now(UTC)
     for ku in mapping.user.kosync_users:
         await write_reading_progress(
@@ -234,7 +233,7 @@ async def _sync_mapping(
     # Skip if neither side has changed since last sync
     if abs_data is not None and ko_progress is not None and mapping.last_synced_at is not None:
         abs_ts = datetime.fromtimestamp(abs_data["lastUpdate"] / 1000, tz=UTC)
-        ko_ts = ko_progress.updated_at.astimezone(UTC)
+        ko_ts = _ensure_utc(ko_progress.updated_at)
         last = _ensure_utc(mapping.last_synced_at)
         if abs_ts <= last and ko_ts <= last:
             logger.debug("Skipping %s: no changes since last sync (%s)", abs_item_id, last)
@@ -247,7 +246,7 @@ async def _sync_mapping(
         await _write_kosync_to_abs(mapping, ko_progress, None, abs_client, sync_map, session)
     else:
         abs_ts = datetime.fromtimestamp(abs_data["lastUpdate"] / 1000, tz=UTC)
-        ko_ts = ko_progress.updated_at.astimezone(UTC)
+        ko_ts = _ensure_utc(ko_progress.updated_at)
         if abs_ts == ko_ts:
             return
         if abs_ts > ko_ts:

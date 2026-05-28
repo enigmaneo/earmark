@@ -56,7 +56,11 @@
 	}
 
 	function formatDate(ts: number) {
-		return new Date(ts * 1000).toLocaleString();
+		return new Intl.DateTimeFormat(undefined, {
+			timeZone: data.timezone,
+			dateStyle: 'medium',
+			timeStyle: 'short',
+		}).format(new Date(ts * 1000));
 	}
 
 

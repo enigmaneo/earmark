@@ -69,3 +69,5 @@ Copy `.env.example` to `.env` and fill in values before running the backend.
 
 Required variables:
 - `SECRET_KEY` — used to sign JWTs; must be set to a strong random value in production
+
+Timezone: all timestamps are stored as UTC. `TIMEZONE` (default `America/New_York`, any IANA name) only controls how the SvelteKit UI renders them — exposed to the frontend via `GET /web/config` and read once in `src/frontend/src/routes/+layout.server.ts`.

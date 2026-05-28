@@ -1,7 +1,13 @@
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_serializer, field_validator
+
+
+def _utc_iso(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 class UserCreate(BaseModel):
@@ -15,6 +21,10 @@ class UserRead(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("created_at")
+    def _ser_created_at(self, dt: datetime) -> str:
+        return _utc_iso(dt)
 
 
 class TokenResponse(BaseModel):
@@ -96,6 +106,10 @@ class AlignmentJobRead(BaseModel):
     completed_at: datetime | None
     warnings: list[str] = []
 
+    @field_serializer("created_at", "updated_at", "completed_at")
+    def _ser_datetimes(self, dt: datetime | None) -> str | None:
+        return _utc_iso(dt) if dt is not None else None
+
     @field_validator("warnings", mode="before")
     @classmethod
     def _decode_warnings(cls, v: object) -> list[str]:
@@ -171,3 +185,7 @@ class MappingRead(BaseModel):
     reading_percentage: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_serializer("created_at")
+    def _ser_created_at(self, dt: datetime) -> str:
+        return _utc_iso(dt)
