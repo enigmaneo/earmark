@@ -72,6 +72,8 @@
 			const prev = mappings.find((p) => p.id === m.id);
 			if (m.sync_status === 'failed' && prev && ACTIVE_STATUSES.has(prev.sync_status ?? '')) {
 				toaster.create({ type: 'error', title: `Alignment failed for "${m.abs_title}"` });
+			} else if ((m.sync_status === 'complete' || m.sync_status === 'complete_with_warnings') && prev && ACTIVE_STATUSES.has(prev.sync_status ?? '')) {
+				toaster.create({ type: 'success', title: `Alignment complete for "${m.abs_title}"` });
 			}
 		}
 		mappings = updated;
@@ -100,6 +102,8 @@
 				const prev = mappings.find((p) => p.id === m.id);
 				if (m.sync_status === 'failed' && prev && ACTIVE_STATUSES.has(prev.sync_status ?? '')) {
 					toaster.create({ type: 'error', title: `Alignment failed for "${m.abs_title}"` });
+				} else if ((m.sync_status === 'complete' || m.sync_status === 'complete_with_warnings') && prev && ACTIVE_STATUSES.has(prev.sync_status ?? '')) {
+					toaster.create({ type: 'success', title: `Alignment complete for "${m.abs_title}"` });
 				}
 			}
 			mappings = updated;
@@ -172,14 +176,14 @@
 	<h1 class="h2">ABS–Ebook Mappings</h1>
 
 	{#if data.loadError}
-		<aside class="alert variant-filled-error"><p>{data.loadError}</p></aside>
+		<aside class="alert preset-filled-error-500"><p>{data.loadError}</p></aside>
 	{/if}
 
 	<div class="card bg-surface-100-900 space-y-4 p-6">
 		<h2 class="h3">Add Mapping</h2>
 
 		{#if form?.error}
-			<aside class="alert variant-filled-error">
+			<aside class="alert preset-filled-error-500">
 				<p>{form.error}</p>
 			</aside>
 		{/if}
@@ -310,7 +314,7 @@
 			<div class="flex justify-end sm:col-span-2">
 				<button
 					type="button"
-					class="btn variant-filled-primary"
+					class="btn preset-filled-primary-500"
 					disabled={!canSubmit}
 					onclick={() => (showSyncConfirmModal = true)}
 				>
@@ -344,11 +348,11 @@
 							{#if ACTIVE_STATUSES.has(m.sync_status ?? '')}
 								<span class="text-xs tabular-nums">{m.sync_progress ?? 0}%</span>
 							{:else if m.sync_status === 'failed'}
-								<span class="badge variant-filled-error text-xs" title={m.sync_error ?? undefined}>Failed</span>
+								<span class="badge preset-filled-error-500 text-xs" title={m.sync_error ?? undefined}>Failed</span>
 							{:else if m.cache_intact === true || m.sync_status === 'complete'}
-								<span class="badge variant-filled-success text-xs">Mapped</span>
+								<span class="badge preset-filled-success-500 text-xs">Mapped</span>
 							{:else}
-								<span class="badge variant-filled-warning text-xs">Unmapped</span>
+								<span class="badge preset-filled-warning-500 text-xs">Unmapped</span>
 							{/if}
 						</td>
 						<td class="min-w-[140px]">
@@ -387,7 +391,7 @@
 								}}
 							>
 								<input type="hidden" name="id" value={m.id} />
-								<button type="submit" class="btn btn-sm variant-ghost-primary" disabled={anyActive}>
+								<button type="submit" class="btn btn-sm preset-outlined-primary-500" disabled={anyActive}>
 									{m.sync_status === 'complete' || m.sync_status === 'failed' ? 'Re-sync' : 'Sync'}
 								</button>
 							</form>
@@ -409,7 +413,7 @@
 								}}
 							>
 								<input type="hidden" name="id" value={m.id} />
-								<button type="submit" class="btn btn-sm variant-ghost-error">Remove</button>
+								<button type="submit" class="btn btn-sm preset-outlined-error-500">Remove</button>
 							</form>
 						</td>
 					</tr>
@@ -443,14 +447,14 @@
 			<div class="flex justify-end gap-3">
 				<button
 					type="button"
-					class="btn variant-ghost"
+					class="btn preset-tonal"
 					onclick={() => (showSyncConfirmModal = false)}
 				>
 					Cancel
 				</button>
 				<button
 					type="button"
-					class="btn variant-filled-primary"
+					class="btn preset-filled-primary-500"
 					onclick={() => addFormEl?.requestSubmit()}
 				>
 					Proceed

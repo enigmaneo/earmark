@@ -13,7 +13,7 @@
 		</div>
 
 		{#if form?.error}
-			<aside class="alert variant-filled-error">
+			<aside class="alert preset-filled-error-500">
 				<p>{form.error}</p>
 			</aside>
 		{/if}
@@ -43,7 +43,7 @@
 				/>
 			</label>
 
-			<button type="submit" class="btn variant-filled-primary w-full">Sign in</button>
+			<button type="submit" class="btn preset-filled-primary-500 w-full">Sign in</button>
 		</form>
 
 		<p class="text-surface-600-400 text-center text-sm">

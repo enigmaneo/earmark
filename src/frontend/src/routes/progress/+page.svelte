@@ -75,7 +75,7 @@
 
 <div class="container mx-auto p-6 space-y-4">
 	{#if data.loadError}
-		<aside class="alert variant-filled-error"><p>{data.loadError}</p></aside>
+		<aside class="alert preset-filled-error-500"><p>{data.loadError}</p></aside>
 	{/if}
 	<div class="flex items-center gap-4">
 		<label for="doc-select" class="text-sm font-medium">Filter by title</label>
@@ -124,7 +124,7 @@
 						<td>{formatDate(item.timestamp)}</td>
 						<td>
 							<button
-								class="btn btn-sm variant-ghost-error"
+								class="btn btn-sm preset-outlined-error-500"
 								onclick={() => { pendingDelete = item; deleteError = null; }}
 							>
 								Delete
@@ -158,7 +158,7 @@
 			<div class="flex justify-end gap-3">
 				<button
 					type="button"
-					class="btn variant-soft"
+					class="btn preset-tonal"
 					onclick={() => { pendingDelete = null; deleteError = null; }}
 				>
 					Cancel
@@ -180,7 +180,7 @@
 					}}
 				>
 					<input type="hidden" name="id" value={pendingDelete?.id} />
-					<button type="submit" class="btn variant-filled-error">Delete</button>
+					<button type="submit" class="btn preset-filled-error-500">Delete</button>
 				</form>
 			</div>
 		</div>
