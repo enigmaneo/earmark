@@ -22,7 +22,7 @@ _ACTIVE_STATUSES = {
 @router.post("/jobs", response_model=AlignmentJobRead, status_code=202)
 async def create_job(
     body: AlignmentJobCreate,
-    _user: User = Depends(get_current_earmark_user),
+    user: User = Depends(get_current_earmark_user),
     session: AsyncSession = Depends(get_session),
 ) -> AlignmentJob:
     existing = await session.execute(
@@ -34,7 +34,7 @@ async def create_job(
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=409, detail="An active job already exists for this item")
 
-    job = AlignmentJob(abs_item_id=body.abs_item_id, status="pending")
+    job = AlignmentJob(abs_item_id=body.abs_item_id, status="pending", created_by_user_id=user.id)
     session.add(job)
     await session.commit()
     await session.refresh(job)
@@ -48,12 +48,13 @@ async def create_job(
 async def list_jobs(
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=20, ge=1, le=100),
-    _user: User = Depends(get_current_earmark_user),
+    user: User = Depends(get_current_earmark_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[AlignmentJob]:
     offset = (page - 1) * per_page
     result = await session.execute(
         select(AlignmentJob)
+        .where(AlignmentJob.created_by_user_id == user.id)
         .order_by(AlignmentJob.created_at.desc())
         .offset(offset)
         .limit(per_page)
@@ -64,11 +65,14 @@ async def list_jobs(
 @router.get("/jobs/{job_id}", response_model=AlignmentJobRead)
 async def get_job(
     job_id: int,
-    _user: User = Depends(get_current_earmark_user),
+    user: User = Depends(get_current_earmark_user),
     session: AsyncSession = Depends(get_session),
 ) -> AlignmentJob:
     result = await session.execute(
-        select(AlignmentJob).where(AlignmentJob.id == job_id)
+        select(AlignmentJob).where(
+            AlignmentJob.id == job_id,
+            AlignmentJob.created_by_user_id == user.id,
+        )
     )
     job = result.scalar_one_or_none()
     if job is None:
@@ -79,11 +83,14 @@ async def get_job(
 @router.get("/jobs/{job_id}/sync-map", response_model=list[SyncMapEntry])
 async def get_sync_map(
     job_id: int,
-    _user: User = Depends(get_current_earmark_user),
+    user: User = Depends(get_current_earmark_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[SyncMapEntry]:
     result = await session.execute(
-        select(AlignmentJob).where(AlignmentJob.id == job_id)
+        select(AlignmentJob).where(
+            AlignmentJob.id == job_id,
+            AlignmentJob.created_by_user_id == user.id,
+        )
     )
     job = result.scalar_one_or_none()
     if job is None:

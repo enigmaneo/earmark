@@ -1,18 +1,28 @@
 import logging
 import os
+from typing import Annotated
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # extra="ignore": the .env is shared with Docker (PORT) and SvelteKit (ORIGIN),
+    # so tolerate env keys this backend doesn't define instead of failing to start.
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     database_url: str = "sqlite+aiosqlite:///./earmark.db"
 
     secret_key: str = "change-me-in-production"
     access_token_expire_minutes: int = 60 * 24 * 7
+
+    # Origins allowed by CORS. Comma-separated in the env (e.g. "https://app.example.com").
+    # NoDecode disables pydantic-settings' JSON parsing so the validator below can split it.
+    cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
 
     audiobookshelf_url: str = ""
     audiobookshelf_api_key: str = ""
@@ -39,6 +49,13 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_pretty: bool = False
     log_requests: bool = False
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
 
 
 settings = Settings()

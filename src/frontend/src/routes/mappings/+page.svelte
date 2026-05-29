@@ -2,6 +2,7 @@
 	import { untrack } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
+	import Modal from '$lib/Modal.svelte';
 	import type {
 		AbsItemSummary,
 		EbookCandidate,
@@ -121,7 +122,7 @@
 
 	function handleRowClick(m: MappingRead) {
 		if (m.kosync_document) {
-			goto(`/progress?document=${m.kosync_document}`);
+			goto(`/progress?document=${encodeURIComponent(m.kosync_document)}`);
 		}
 	}
 
@@ -429,37 +430,32 @@
 	</div>
 </div>
 
-{#if showSyncConfirmModal}
-	<div
-		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-		role="dialog"
-		aria-modal="true"
-		aria-labelledby="sync-confirm-title"
-	>
-		<div class="card bg-surface-100-900 w-full max-w-md space-y-6 p-6 shadow-xl">
-			<h2 class="h3" id="sync-confirm-title">Begin Alignment</h2>
-			<p class="text-surface-700-300 text-sm leading-relaxed">
-				Adding this mapping will immediately begin the alignment process, which analyzes and
-				synchronizes your audiobook and ebook. This process may take several minutes depending on
-				the length of the audiobook. Please ensure you have a stable connection before proceeding.
-			</p>
-			<p class="text-surface-700-300 text-sm">Would you like to proceed?</p>
-			<div class="flex justify-end gap-3">
-				<button
-					type="button"
-					class="btn preset-tonal"
-					onclick={() => (showSyncConfirmModal = false)}
-				>
-					Cancel
-				</button>
-				<button
-					type="button"
-					class="btn preset-filled-primary-500"
-					onclick={() => addFormEl?.requestSubmit()}
-				>
-					Proceed
-				</button>
-			</div>
-		</div>
+<Modal
+	open={showSyncConfirmModal}
+	onclose={() => (showSyncConfirmModal = false)}
+	labelledby="sync-confirm-title"
+>
+	<h2 class="h3" id="sync-confirm-title">Begin Alignment</h2>
+	<p class="text-surface-700-300 text-sm leading-relaxed">
+		Adding this mapping will immediately begin the alignment process, which analyzes and
+		synchronizes your audiobook and ebook. This process may take several minutes depending on
+		the length of the audiobook. Please ensure you have a stable connection before proceeding.
+	</p>
+	<p class="text-surface-700-300 text-sm">Would you like to proceed?</p>
+	<div class="flex justify-end gap-3">
+		<button
+			type="button"
+			class="btn preset-tonal"
+			onclick={() => (showSyncConfirmModal = false)}
+		>
+			Cancel
+		</button>
+		<button
+			type="button"
+			class="btn preset-filled-primary-500"
+			onclick={() => addFormEl?.requestSubmit()}
+		>
+			Proceed
+		</button>
 	</div>
-{/if}
+</Modal>

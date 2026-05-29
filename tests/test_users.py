@@ -12,7 +12,7 @@ async def test_create_user(client: AsyncClient) -> None:
 async def test_create_user_duplicate(client: AsyncClient) -> None:
     await client.post("/users/create", json={"username": "alice", "password": "hunter2"})
     response = await client.post("/users/create", json={"username": "alice", "password": "other"})
-    assert response.status_code == 402
+    assert response.status_code == 409
 
 
 async def test_auth_valid(client: AsyncClient, alice: dict[str, str]) -> None:

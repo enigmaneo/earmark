@@ -277,6 +277,32 @@ async def test_list_jobs_pagination(client: AsyncClient, jwt_headers: dict[str, 
     assert len(resp.json()) == 2
 
 
+async def test_jobs_are_scoped_to_creator(
+    client: AsyncClient, jwt_headers: dict[str, str]
+) -> None:
+    # User A creates a job.
+    created = await client.post(
+        "/alignment/jobs", json={"abs_item_id": "li_owned_by_a"}, headers=jwt_headers
+    )
+    job_id = created.json()["id"]
+
+    # User B authenticates separately.
+    await client.post("/auth/register", json={"email": "other@example.com", "password": "secret"})
+    login = await client.post(
+        "/auth/login", json={"email": "other@example.com", "password": "secret"}
+    )
+    b_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    # B cannot see A's job in the list, by id, or its sync-map.
+    listing = await client.get("/alignment/jobs", headers=b_headers)
+    assert listing.status_code == 200
+    assert all(j["id"] != job_id for j in listing.json())
+    assert (await client.get(f"/alignment/jobs/{job_id}", headers=b_headers)).status_code == 404
+    assert (
+        await client.get(f"/alignment/jobs/{job_id}/sync-map", headers=b_headers)
+    ).status_code == 404
+
+
 async def test_full_pipeline_happy_path(
     client: AsyncClient,
     jwt_headers: dict[str, str],

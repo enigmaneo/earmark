@@ -48,6 +48,8 @@ packages = ["src/earmark"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+# Alembic-generated migration scripts follow Alembic's own style.
+extend-exclude = ["migrations"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
@@ -56,6 +58,7 @@ select = ["E", "F", "I", "UP"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+exclude = ["migrations"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

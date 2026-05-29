@@ -3,11 +3,12 @@ import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from earmark.config import settings
-from earmark.database import init_db
+from earmark.database import AsyncSessionLocal, init_db
 from earmark.routers import alignment, auth, mappings, progress, users
 from earmark.routers.progress import web_router
 from earmark.scheduler import start_scheduler, stop_scheduler
@@ -46,11 +47,16 @@ app = FastAPI(title="earmark", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Headers and paths whose contents must never be written to logs.
+_REDACTED_HEADERS = {"authorization", "x-auth-key", "cookie", "set-cookie"}
+_SENSITIVE_BODY_PATHS = {"/auth/login", "/auth/register", "/users/create"}
+
 
 @app.middleware("http")
 async def log_requests_middleware(request: Request, call_next):
@@ -60,8 +66,14 @@ async def log_requests_middleware(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     ms = (time.perf_counter() - start) * 1000
-    body_str = body.decode("utf-8", errors="replace") if body else ""
-    headers_str = dict(request.headers)
+    if request.url.path in _SENSITIVE_BODY_PATHS:
+        body_str = "<redacted>"
+    else:
+        body_str = body.decode("utf-8", errors="replace") if body else ""
+    headers_str = {
+        k: ("<redacted>" if k.lower() in _REDACTED_HEADERS else v)
+        for k, v in request.headers.items()
+    }
     logger.info("%s %s → %d (%.1f ms) headers=%s body=%s", request.method, request.url.path, response.status_code, ms, headers_str, body_str)
     return response
 
@@ -75,5 +87,12 @@ app.include_router(mappings.router)
 
 
 @app.get("/healthcheck")
-async def healthcheck() -> dict[str, str]:
+async def healthcheck(response: Response) -> dict[str, str]:
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+    except Exception:
+        logger.exception("Healthcheck DB connectivity failed")
+        response.status_code = 503
+        return {"state": "ERROR", "detail": "database unreachable"}
     return {"state": "OK"}

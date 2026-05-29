@@ -18,7 +18,7 @@ from earmark.schemas import (
     MappingCreate,
     MappingRead,
 )
-from earmark.utils import partial_md5
+from earmark.utils import partial_md5, safe_subpath
 from earmark.services.alignment import ACTIVE_STATUSES, run_alignment_job
 from earmark.services.audiobookshelf import AudiobookshelfClient
 from earmark.services.ebook_sources import CalibreOpdsSource
@@ -31,6 +31,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/web", tags=["mappings"])
 
 _EBOOK_EXTENSIONS = {".epub", ".pdf", ".mobi", ".azw3"}
+
+
+@router.get("/sync-status")
+async def get_sync_status(
+    _user: User = Depends(get_current_earmark_user),
+) -> dict[str, object]:
+    """Report the outcome of the most recent scheduled progress sync."""
+    from earmark.scheduler import sync_status
+
+    return {
+        "last_run_at": sync_status.last_run_at.isoformat() if sync_status.last_run_at else None,
+        "last_duration_seconds": sync_status.last_duration_seconds,
+        "last_synced_count": sync_status.last_synced_count,
+        "last_error": sync_status.last_error,
+        "interval_seconds": settings.sync_interval_seconds,
+    }
 
 
 def _check_cache_intact(abs_item_id: str, lib_item: AbsLibraryItem | None) -> bool | None:
@@ -371,8 +387,11 @@ async def create_mapping(
     kosync_document: str | None = None
     ebook_filename: str | None = None
     if body.ebook_source == "local":
-        assert body.ebook_path is not None
-        full_path = Path(settings.ebook_local_root) / body.ebook_path
+        if body.ebook_path is None:
+            raise HTTPException(status_code=400, detail="ebook_path is required for local source")
+        full_path = safe_subpath(settings.ebook_local_root, body.ebook_path)
+        if full_path is None:
+            raise HTTPException(status_code=400, detail="Invalid ebook_path")
         try:
             kosync_document = await asyncio.to_thread(partial_md5, full_path)
         except OSError:
@@ -429,7 +448,11 @@ async def delete_mapping(
     abs_item_id = mapping.abs_item_id
     await session.delete(mapping)
     await session.commit()
-    shutil.rmtree(Path(settings.alignment_cache_dir) / abs_item_id, ignore_errors=True)
+    cache_path = safe_subpath(settings.alignment_cache_dir, abs_item_id)
+    if cache_path is not None:
+        shutil.rmtree(cache_path, ignore_errors=True)
+    else:
+        logger.warning("Refusing to remove cache for unsafe abs_item_id: %r", abs_item_id)
     return {"deleted": mapping_id}
 
 
@@ -457,6 +480,7 @@ async def sync_mapping(
 
     job = AlignmentJob(
         abs_item_id=mapping.abs_item_id,
+        created_by_user_id=user.id,
         status="pending",
         progress=0,
         ebook_path=mapping.ebook_path,

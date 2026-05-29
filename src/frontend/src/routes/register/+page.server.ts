@@ -1,4 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
+import { dev } from '$app/environment';
 import type { Actions } from './$types';
 import { config } from '$lib/server/config';
 
@@ -52,7 +53,8 @@ export const actions: Actions = {
 			httpOnly: true,
 			path: '/',
 			maxAge: 60 * 60 * 24 * 7,
-			sameSite: 'lax'
+			sameSite: 'lax',
+			secure: !dev
 		});
 
 		redirect(302, '/');

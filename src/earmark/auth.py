@@ -1,3 +1,5 @@
+import secrets
+
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +15,6 @@ async def get_current_user(
 ) -> KosyncUser:
     result = await session.execute(select(KosyncUser).where(KosyncUser.username == x_auth_user))
     user = result.scalar_one_or_none()
-    if user is None or user.password_hash != x_auth_key:
+    if user is None or not secrets.compare_digest(user.password_hash, x_auth_key):
         raise HTTPException(status_code=401, detail="Unauthorized")
     return user

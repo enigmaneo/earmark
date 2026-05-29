@@ -79,6 +79,9 @@ class AlignmentJob(Base):
     abs_item_id: Mapped[str] = mapped_column(
         String(255), ForeignKey("abs_library_items.abs_item_id"), index=True
     )
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
     status: Mapped[str] = mapped_column(String(50), default="pending")
     progress: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
