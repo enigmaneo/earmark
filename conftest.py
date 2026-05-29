@@ -1,4 +1,8 @@
 import hashlib
+import os
+
+# Allow the default/insecure SECRET_KEY during tests (Settings validates it at import).
+os.environ.setdefault("DEV_MODE", "true")
 
 import pytest
 from httpx import ASGITransport, AsyncClient

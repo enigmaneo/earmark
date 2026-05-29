@@ -42,7 +42,7 @@ async def create_user(
 ) -> KosyncUserCreated:
     existing = await session.execute(select(KosyncUser).where(KosyncUser.username == body.username))
     if existing.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=402, detail="Username already taken")
+        raise HTTPException(status_code=409, detail="Username already taken")
 
     user = KosyncUser(
         username=body.username,
