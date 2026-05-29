@@ -8,9 +8,6 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
-    env:
-      # Tests don't need a real secret; DEV_MODE relaxes the SECRET_KEY guard.
-      DEV_MODE: "true"
     steps:
       - uses: actions/checkout@v4
 

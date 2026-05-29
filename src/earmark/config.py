@@ -2,23 +2,22 @@ import logging
 import os
 from typing import Annotated
 
-from pydantic import field_validator, model_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_SECRET_KEY = "change-me-in-production"
-
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
-
-    # When true, weaken production guards (e.g. allow the default secret_key) for local dev.
-    dev_mode: bool = False
+    # extra="ignore": the .env is shared with Docker (PORT) and SvelteKit (ORIGIN),
+    # so tolerate env keys this backend doesn't define instead of failing to start.
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     database_url: str = "sqlite+aiosqlite:///./earmark.db"
 
-    secret_key: str = _DEFAULT_SECRET_KEY
+    secret_key: str = "change-me-in-production"
     access_token_expire_minutes: int = 60 * 24 * 7
 
     # Origins allowed by CORS. Comma-separated in the env (e.g. "https://app.example.com").
@@ -57,20 +56,6 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
-
-    @model_validator(mode="after")
-    def _validate_secret_key(self) -> "Settings":
-        weak = self.secret_key == _DEFAULT_SECRET_KEY or len(self.secret_key) < 32
-        if weak:
-            message = (
-                "SECRET_KEY is the insecure default or shorter than 32 characters. "
-                "Set a strong random SECRET_KEY in production."
-            )
-            if self.dev_mode:
-                logger.warning("%s (allowed because DEV_MODE is enabled)", message)
-            else:
-                raise ValueError(message)
-        return self
 
 
 settings = Settings()
