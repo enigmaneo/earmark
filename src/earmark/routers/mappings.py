@@ -33,6 +33,22 @@ router = APIRouter(prefix="/web", tags=["mappings"])
 _EBOOK_EXTENSIONS = {".epub", ".pdf", ".mobi", ".azw3"}
 
 
+@router.get("/sync-status")
+async def get_sync_status(
+    _user: User = Depends(get_current_earmark_user),
+) -> dict[str, object]:
+    """Report the outcome of the most recent scheduled progress sync."""
+    from earmark.scheduler import sync_status
+
+    return {
+        "last_run_at": sync_status.last_run_at.isoformat() if sync_status.last_run_at else None,
+        "last_duration_seconds": sync_status.last_duration_seconds,
+        "last_synced_count": sync_status.last_synced_count,
+        "last_error": sync_status.last_error,
+        "interval_seconds": settings.sync_interval_seconds,
+    }
+
+
 def _check_cache_intact(abs_item_id: str, lib_item: AbsLibraryItem | None) -> bool | None:
     if lib_item is None or lib_item.abs_updated_at is None:
         return None

@@ -25,6 +25,18 @@ scheduler = AsyncIOScheduler()
 _SYNC_DEVICE = "earmark-sync"
 
 
+class SyncStatus:
+    """In-memory record of the most recent scheduled sync run."""
+
+    last_run_at: datetime | None = None
+    last_duration_seconds: float | None = None
+    last_error: str | None = None
+    last_synced_count: int | None = None
+
+
+sync_status = SyncStatus()
+
+
 def _load_sync_map(path: str) -> list[dict[str, Any]] | None:
     p = Path(path)
     if not p.exists():
@@ -261,38 +273,54 @@ async def _sync_mapping(
 async def sync_progress() -> None:
     logger.info("Running progress sync")
     started_at = asyncio.get_event_loop().time()
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(AbsEbookMapping.id)
-            .join(AlignmentJob, AbsEbookMapping.alignment_job_id == AlignmentJob.id)
-            .where(
-                AbsEbookMapping.kosync_document.isnot(None),
-                AlignmentJob.status.in_(("complete", "complete_with_warnings")),
-                AlignmentJob.sync_map_path.isnot(None),
-            )
-        )
-        mapping_ids: list[int] = list(result.scalars())
-
-    abs_client = AudiobookshelfClient()
+    synced = 0
+    run_error: str | None = None
     try:
-        for mapping_id in mapping_ids:
-            try:
-                async with AsyncSessionLocal() as session:
-                    mapping_result = await session.execute(
-                        select(AbsEbookMapping)
-                        .options(selectinload(AbsEbookMapping.user).selectinload(User.kosync_users))
-                        .where(AbsEbookMapping.id == mapping_id)
-                    )
-                    mapping = mapping_result.scalar_one_or_none()
-                    if mapping is None:
-                        continue
-                    await _sync_mapping(mapping, abs_client, session)
-            except Exception:
-                logger.exception("Error syncing mapping %s", mapping_id)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(AbsEbookMapping.id)
+                .join(AlignmentJob, AbsEbookMapping.alignment_job_id == AlignmentJob.id)
+                .where(
+                    AbsEbookMapping.kosync_document.isnot(None),
+                    AlignmentJob.status.in_(("complete", "complete_with_warnings")),
+                    AlignmentJob.sync_map_path.isnot(None),
+                )
+            )
+            mapping_ids: list[int] = list(result.scalars())
+
+        abs_client = AudiobookshelfClient()
+        try:
+            for mapping_id in mapping_ids:
+                try:
+                    async with AsyncSessionLocal() as session:
+                        mapping_result = await session.execute(
+                            select(AbsEbookMapping)
+                            .options(
+                                selectinload(AbsEbookMapping.user).selectinload(
+                                    User.kosync_users
+                                )
+                            )
+                            .where(AbsEbookMapping.id == mapping_id)
+                        )
+                        mapping = mapping_result.scalar_one_or_none()
+                        if mapping is None:
+                            continue
+                        await _sync_mapping(mapping, abs_client, session)
+                        synced += 1
+                except Exception:
+                    logger.exception("Error syncing mapping %s", mapping_id)
+        finally:
+            await abs_client.close()
+    except Exception as exc:
+        run_error = repr(exc)
+        logger.exception("Progress sync failed")
     finally:
-        await abs_client.close()
-    elapsed = asyncio.get_event_loop().time() - started_at
-    logger.info("Progress sync complete (%.2fs)", elapsed)
+        elapsed = asyncio.get_event_loop().time() - started_at
+        sync_status.last_run_at = datetime.now(UTC)
+        sync_status.last_duration_seconds = elapsed
+        sync_status.last_error = run_error
+        sync_status.last_synced_count = synced
+    logger.info("Progress sync complete (%.2fs, %d mappings)", elapsed, synced)
 
 
 def start_scheduler() -> None:
@@ -302,6 +330,9 @@ def start_scheduler() -> None:
         seconds=settings.sync_interval_seconds,
         id="sync_progress",
         replace_existing=True,
+        max_instances=1,  # never run two syncs concurrently
+        coalesce=True,  # collapse missed runs into one
+        misfire_grace_time=settings.sync_interval_seconds,
     )
     scheduler.start()
 
