@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     kosync_port: int = 8080
 
     sync_interval_seconds: int = 300
+    # Min seconds since ABS lastUpdate before an ABS→KOSync write is allowed. While an
+    # audiobook is actively playing, lastUpdate keeps advancing; deferring until it has
+    # been idle this long collapses a listening session into a single KOSync entry.
+    sync_abs_idle_seconds: int = 360
 
     cwa_url: str = ""
     cwa_username: str = ""

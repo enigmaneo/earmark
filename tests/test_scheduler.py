@@ -104,7 +104,8 @@ async def test_sync_progress_writes_kosync_and_records_status(
         return_value={
             "currentTime": 100.0,
             "duration": DURATION,
-            "lastUpdate": int(time.time() * 1000),
+            # Idle past the threshold (playback stopped) so ABS→KOSync writes.
+            "lastUpdate": (int(time.time()) - 3600) * 1000,
         }
     )
 

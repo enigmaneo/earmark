@@ -64,6 +64,15 @@ ko_ts   = ReadingProgress.updated_at (UTC-aware)
 | ABS has progress, KOSync has none | Write ABS position to KOSync unconditionally |
 | KOSync has progress, ABS has none | Write KOSync position to ABS unconditionally |
 
+**Idle guard (ABS → KOSync only, applied before the forward-only guard):**
+
+While an audiobook is actively playing, ABS's `lastUpdate` advances every sync cycle, which
+would otherwise produce a new KOSync entry each cycle. To collapse a listening session into a
+single write, ABS → KOSync is deferred until ABS has been idle for at least
+`SYNC_ABS_IDLE_SECONDS` (default 300). If `now - abs_lastUpdate < SYNC_ABS_IDLE_SECONDS`, the
+update is skipped for this run (and `last_synced_at` is left untouched so the next cycle
+re-evaluates). KOSync → ABS is unaffected.
+
 **Forward-only guard (applied before writing):**
 
 - ABS → KOSync: if `new_percentage ≤ current_kosync_percentage`, log WARN and skip.
@@ -272,6 +281,7 @@ The sync job logs `logger.warning(...)` and silently skips the update in the fol
 
 | Condition | Log message |
 |-----------|-------------|
+| ABS → KOSync: ABS `lastUpdate` idle for less than `SYNC_ABS_IDLE_SECONDS` (still playing) | `"Deferring ABS→KOSync for {abs_item_id}: idle {x:.0f}s < {n}s, still playing"` |
 | ABS → KOSync: new `percentage ≤` current KOSync `percentage` | `"Skipping KOSync update for {abs_item_id}: new percentage {x:.4f} ≤ current {y:.4f}"` |
 | KOSync → ABS: new `currentTime ≤` current ABS `currentTime` | `"Skipping ABS update for {abs_item_id}: new position {x:.1f}s ≤ current {y:.1f}s"` |
 | KOSync → ABS: DocFragment not found in sync map | `"Cannot map KOSync XPath to ABS for {abs_item_id}: DocFragment[{N}] not in sync map"` |
