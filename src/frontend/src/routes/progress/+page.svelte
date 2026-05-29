@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { enhance } from '$app/forms';
 	import { page } from '$app/stores';
+	import Modal from '$lib/Modal.svelte';
 	import type { PageData } from './$types';
 	import type { SortBy, SortDir, ProgressItem } from '$lib/api';
 
@@ -9,6 +10,10 @@
 
 	let items = $state<ProgressItem[]>([]);
 	let total = $state<number>(0);
+	let perPage = $state<number>(50);
+	let currentPage = $state<number>(1);
+
+	let totalPages = $derived(Math.max(1, Math.ceil(total / perPage)));
 
 	let selectedDocument = $state<string>('');
 	let sortBy = $state<SortBy>('updated_at');
@@ -67,6 +72,8 @@
 	$effect(() => {
 		items = data.progressList.data;
 		total = data.progressList.total;
+		perPage = data.progressList.per_page ?? 50;
+		currentPage = data.page ?? 1;
 		selectedDocument = data.document ?? '';
 		sortBy = data.sort_by as SortBy;
 		sortDir = data.sort_dir as SortDir;
@@ -139,50 +146,66 @@
 			</tbody>
 		</table>
 	</div>
+
+	{#if totalPages > 1}
+		<div class="flex items-center justify-end gap-3">
+			<button
+				class="btn btn-sm preset-tonal"
+				disabled={currentPage <= 1}
+				onclick={() => navigate({ page: String(currentPage - 1) })}
+			>
+				Previous
+			</button>
+			<span class="text-surface-500 text-sm">Page {currentPage} of {totalPages}</span>
+			<button
+				class="btn btn-sm preset-tonal"
+				disabled={currentPage >= totalPages}
+				onclick={() => navigate({ page: String(currentPage + 1) })}
+			>
+				Next
+			</button>
+		</div>
+	{/if}
 </div>
 
-{#if pendingDelete}
-	<div
-		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-		role="dialog"
-		aria-modal="true"
-	>
-		<div class="card bg-surface-100-900 w-full max-w-md space-y-4 p-6 shadow-xl">
-			<h3 class="h3">Delete entry?</h3>
-			<p class="text-surface-600-400">
-				This will permanently remove this progress entry. It cannot be undone.
-			</p>
-			{#if deleteError}
-				<p class="text-error-500 text-sm">{deleteError}</p>
-			{/if}
-			<div class="flex justify-end gap-3">
-				<button
-					type="button"
-					class="btn preset-tonal"
-					onclick={() => { pendingDelete = null; deleteError = null; }}
-				>
-					Cancel
-				</button>
-				<form
-					method="POST"
-					action="?/deleteRecord"
-					use:enhance={() => {
-						return async ({ result, update }) => {
-							if (result.type === 'success' && result.data?.deleted) {
-								pendingDelete = null;
-								deleteError = null;
-								await update();
-							} else {
-								deleteError = 'Failed to delete. Please try again.';
-								await update();
-							}
-						};
-					}}
-				>
-					<input type="hidden" name="id" value={pendingDelete?.id} />
-					<button type="submit" class="btn preset-filled-error-500">Delete</button>
-				</form>
-			</div>
-		</div>
+<Modal
+	open={pendingDelete !== null}
+	onclose={() => { pendingDelete = null; deleteError = null; }}
+	labelledby="delete-title"
+>
+	<h3 class="h3" id="delete-title">Delete entry?</h3>
+	<p class="text-surface-600-400">
+		This will permanently remove this progress entry. It cannot be undone.
+	</p>
+	{#if deleteError}
+		<p class="text-error-500 text-sm">{deleteError}</p>
+	{/if}
+	<div class="flex justify-end gap-3">
+		<button
+			type="button"
+			class="btn preset-tonal"
+			onclick={() => { pendingDelete = null; deleteError = null; }}
+		>
+			Cancel
+		</button>
+		<form
+			method="POST"
+			action="?/deleteRecord"
+			use:enhance={() => {
+				return async ({ result, update }) => {
+					if (result.type === 'success' && result.data?.deleted) {
+						pendingDelete = null;
+						deleteError = null;
+						await update();
+					} else {
+						deleteError = 'Failed to delete. Please try again.';
+						await update();
+					}
+				};
+			}}
+		>
+			<input type="hidden" name="id" value={pendingDelete?.id} />
+			<button type="submit" class="btn preset-filled-error-500">Delete</button>
+		</form>
 	</div>
-{/if}
+</Modal>
