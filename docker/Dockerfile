@@ -36,6 +36,10 @@ WORKDIR /app
 COPY --from=backend-builder /app/.venv ./.venv
 COPY --from=backend-builder /app/src ./src
 
+# Alembic config + migration scripts (init_db runs `alembic upgrade head` at startup).
+COPY alembic.ini ./alembic.ini
+COPY migrations ./migrations
+
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     OMP_NUM_THREADS=4 \
