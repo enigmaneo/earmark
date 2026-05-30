@@ -131,6 +131,17 @@ async def _write_abs_to_kosync(
     min_percentage: float | None = None,
 ) -> None:
     assert mapping.kosync_document  # caller guards this
+    abs_updated_at = datetime.fromtimestamp(abs_data["lastUpdate"] / 1000, tz=UTC)
+    idle = (datetime.now(UTC) - abs_updated_at).total_seconds()
+    if idle < settings.sync_abs_idle_seconds:
+        # ABS lastUpdate is still advancing → playback is active. Defer the write so we
+        # don't add a KOSync entry per sync cycle; a later cycle will write once playback
+        # has stopped. Don't touch last_synced_at so the next cycle re-evaluates.
+        logger.debug(
+            "Deferring ABS→KOSync for %s: idle %.0fs < %ds, still playing",
+            mapping.abs_item_id, idle, settings.sync_abs_idle_seconds,
+        )
+        return
     ebook_pos, new_pct = _audio_to_kosync(
         abs_data["currentTime"], abs_data["duration"], sync_map
     )
@@ -140,7 +151,6 @@ async def _write_abs_to_kosync(
             mapping.abs_item_id, new_pct, min_percentage,
         )
         return
-    abs_updated_at = datetime.fromtimestamp(abs_data["lastUpdate"] / 1000, tz=UTC)
     mapping.last_synced_at = datetime.now(UTC)
     for ku in mapping.user.kosync_users:
         await write_reading_progress(

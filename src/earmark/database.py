@@ -12,7 +12,24 @@ logger = logging.getLogger(__name__)
 engine = create_async_engine(settings.database_url, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
-_ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
+def _find_alembic_ini() -> Path:
+    """Locate alembic.ini across run layouts.
+
+    Running from the source tree, it sits at the project root (two levels above
+    this module). When earmark is installed as a wheel (e.g. the Docker image),
+    __file__ lives in site-packages, so that path is wrong — fall back to the
+    working directory, where the deployment places alembic.ini + migrations.
+    """
+    from_source = Path(__file__).resolve().parents[2] / "alembic.ini"
+    if from_source.exists():
+        return from_source
+    from_cwd = Path.cwd() / "alembic.ini"
+    if from_cwd.exists():
+        return from_cwd
+    return from_source
+
+
+_ALEMBIC_INI = _find_alembic_ini()
 
 
 class Base(DeclarativeBase):

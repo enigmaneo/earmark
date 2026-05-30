@@ -1,5 +1,6 @@
 import json
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -30,6 +31,11 @@ SYNC_MAP = [
 ]
 
 DURATION = 400.0
+
+
+def _stopped_ms() -> int:
+    """ABS lastUpdate (Unix ms) old enough to count as stopped (past the idle threshold)."""
+    return (int(time.time()) - 3600) * 1000
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +315,9 @@ async def test_sync_abs_newer_writes_kosync(
     async with db_session_factory() as session:
         mapping = await _setup_mapping(session, str(sync_map_file))
 
-        # ABS has progress; KOSync has none → unconditional write to KOSync
-        abs_data = {"currentTime": 50.0, "duration": DURATION, "lastUpdate": int(time.time() * 1000)}
+        # ABS has progress; KOSync has none → unconditional write to KOSync.
+        # lastUpdate is well past the idle threshold (playback stopped).
+        abs_data = {"currentTime": 50.0, "duration": DURATION, "lastUpdate": _stopped_ms()}
         client = _make_abs_client(abs_data)
 
         await _sync_mapping(mapping, client, session)
@@ -334,7 +341,7 @@ async def test_sync_abs_newer_writes_all_kosync_users(
     async with db_session_factory() as session:
         mapping = await _setup_mapping(session, str(sync_map_file), num_kosync_users=2)
 
-        abs_data = {"currentTime": 50.0, "duration": DURATION, "lastUpdate": int(time.time() * 1000)}
+        abs_data = {"currentTime": 50.0, "duration": DURATION, "lastUpdate": _stopped_ms()}
         client = _make_abs_client(abs_data)
 
         await _sync_mapping(mapping, client, session)
@@ -345,6 +352,70 @@ async def test_sync_abs_newer_writes_all_kosync_users(
         )
         records = result.scalars().all()
         assert len(records) == 2
+
+
+async def test_sync_abs_playing_defers_kosync_write(
+    db_session_factory: async_sessionmaker, tmp_path: Path
+) -> None:
+    sync_map_file = tmp_path / "sync_map.json"
+    sync_map_file.write_text(json.dumps(SYNC_MAP))
+
+    async with db_session_factory() as session:
+        mapping = await _setup_mapping(session, str(sync_map_file))
+
+        # ABS lastUpdate is recent → playback is active → defer (no KOSync write).
+        now_ms = int(time.time() * 1000)
+        abs_data = {"currentTime": 50.0, "duration": DURATION, "lastUpdate": now_ms}
+        client = _make_abs_client(abs_data)
+
+        await _sync_mapping(mapping, client, session)
+
+        result = await session.execute(
+            select(ReadingProgress)
+            .where(ReadingProgress.document == DOCUMENT, ReadingProgress.is_latest == True)  # noqa: E712
+        )
+        assert result.scalars().all() == []
+        assert mapping.last_synced_at is None
+
+
+async def test_sync_kosync_newer_writes_abs_even_while_abs_playing(
+    db_session_factory: async_sessionmaker, tmp_path: Path
+) -> None:
+    # The idle guard only gates ABS→KOSync; a newer KOSync position must still
+    # push to ABS regardless of how recently ABS was playing.
+    sync_map_file = tmp_path / "sync_map.json"
+    sync_map_file.write_text(json.dumps(SYNC_MAP))
+
+    async with db_session_factory() as session:
+        mapping = await _setup_mapping(session, str(sync_map_file))
+
+        ko_user_result = await session.execute(
+            select(KosyncUser).where(KosyncUser.username == "ku0")
+        )
+        ko_user = ko_user_result.scalar_one()
+        # KOSync is newer (now) and ahead; ABS is older and recently playing.
+        await write_reading_progress(
+            session,
+            kosync_user_id=ko_user.id,
+            document=DOCUMENT,
+            progress="/body/DocFragment[3]/body/section[1]/p[2]",  # 200s
+            percentage=0.5,
+            device="koreader",
+            device_id="koreader",
+        )
+
+        # ABS played 10s ago (recent → "playing", inside the idle threshold) but is
+        # older than the KOSync record, so the direction is KOSync→ABS.
+        abs_data = {
+            "currentTime": 10.0,
+            "duration": DURATION,
+            "lastUpdate": (int(time.time()) - 10) * 1000,
+        }
+        client = _make_abs_client(abs_data)
+
+        await _sync_mapping(mapping, client, session)
+
+        client.update_progress.assert_awaited_once()
 
 
 async def test_sync_kosync_newer_writes_abs(
@@ -394,7 +465,7 @@ async def test_sync_forward_only_guard_abs_to_kosync(
             select(KosyncUser).where(KosyncUser.username == "ku0")
         )
         ko_user = ko_user_result.scalar_one()
-        # KOSync already at 0.9; ABS is newer but at only 0.1 → should skip
+        # KOSync already at 0.9 (older); ABS is newer but at only 0.1 → should skip
         await write_reading_progress(
             session,
             kosync_user_id=ko_user.id,
@@ -403,11 +474,12 @@ async def test_sync_forward_only_guard_abs_to_kosync(
             percentage=0.9,
             device="koreader",
             device_id="koreader",
+            updated_at=datetime.now(UTC) - timedelta(hours=2),
         )
 
-        # ABS is newer (future timestamp) but at a lower position
-        future_ms = (int(time.time()) + 3600) * 1000
-        abs_data = {"currentTime": 10.0, "duration": DURATION, "lastUpdate": future_ms}
+        # ABS is newer than the KOSync record and stopped (idle past threshold),
+        # but at a lower position → forward-only guard skips it.
+        abs_data = {"currentTime": 10.0, "duration": DURATION, "lastUpdate": _stopped_ms()}
         client = _make_abs_client(abs_data)
 
         await _sync_mapping(mapping, client, session)
