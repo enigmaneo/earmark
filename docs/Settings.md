@@ -26,7 +26,7 @@ Settings that are **env-only** and cannot be overridden from the UI:
 | `key` | `VARCHAR(100)` | Primary key; matches `config.py` field names |
 | `label` | `VARCHAR(200)` | Human-readable name shown in the UI |
 | `description` | `TEXT` | Help text shown in the UI |
-| `value_type` | `VARCHAR(20)` | `string` \| `int` \| `password` |
+| `value_type` | `VARCHAR(20)` | `string` \| `int` \| `password` \| `timezone` |
 | `value` | `TEXT` (nullable) | `NULL` = use env default |
 | `is_secret` | `BOOLEAN` | Secrets are encrypted at rest (see below) |
 | `updated_at` | `DATETIME` | Auto-updated on write |
@@ -58,7 +58,7 @@ These rows are inserted at startup if they do not already exist (idempotent). `v
 | `cwa_url` | Calibre Web URL | string | No | `CWA_URL` |
 | `cwa_username` | Calibre Web Username | string | Yes | `CWA_USERNAME` |
 | `cwa_password` | Calibre Web Password | password | Yes | `CWA_PASSWORD` |
-| `timezone` | Timezone | string | No | `TIMEZONE` |
+| `timezone` | Timezone | timezone | No | `TIMEZONE` |
 | `sync_interval_seconds` | Sync Interval (seconds) | int | No | `SYNC_INTERVAL_SECONDS` |
 | `sync_abs_idle_seconds` | ABS Idle Threshold (seconds) | int | No | `SYNC_ABS_IDLE_SECONDS` |
 
@@ -165,6 +165,10 @@ Three sections corresponding to the three external integrations and application-
 1. **Audiobookshelf** — URL, API Key
 2. **Calibre Web** — URL, Username, Password
 3. **Application** — Timezone, Sync Interval, ABS Idle Threshold
+
+The UI control for each field is chosen from its `value_type` (not its key): `timezone` renders a
+dropdown of IANA timezones (`Intl.supportedValuesOf('timeZone')`), `int` renders a number spinner,
+and everything else renders a text or password input.
 
 UI rules:
 - Non-secret fields are pre-filled with the current `display_value`.

@@ -1,4 +1,5 @@
 import logging
+from zoneinfo import available_timezones
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -64,6 +65,11 @@ async def update_setting(
             raise HTTPException(status_code=422, detail=f"{key} requires an integer value")
         if parsed < 1:
             raise HTTPException(status_code=422, detail=f"{key} must be a positive integer")
+    elif defn["value_type"] == "timezone":
+        if body.value not in available_timezones():
+            raise HTTPException(
+                status_code=422, detail=f"{body.value} is not a valid IANA timezone"
+            )
 
     stored_value = encrypt_secret(body.value) if defn["is_secret"] else body.value
 

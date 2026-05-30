@@ -58,7 +58,7 @@ SETTING_DEFINITIONS: list[dict[str, Any]] = [
         "key": "timezone",
         "label": "Timezone",
         "description": "IANA timezone for displaying timestamps in the UI (e.g. America/New_York)",
-        "value_type": "string",
+        "value_type": "timezone",
         "is_secret": False,
         "env_default_fn": lambda: settings.timezone,
     },
@@ -100,10 +100,11 @@ def decrypt_secret(token: str) -> str:
 
 
 async def seed_settings(session: AsyncSession) -> None:
-    existing_result = await session.execute(select(AppSetting.key))
-    existing_keys = set(existing_result.scalars().all())
+    existing_result = await session.execute(select(AppSetting))
+    existing_by_key = {row.key: row for row in existing_result.scalars()}
     for defn in SETTING_DEFINITIONS:
-        if defn["key"] not in existing_keys:
+        row = existing_by_key.get(defn["key"])
+        if row is None:
             session.add(AppSetting(
                 key=defn["key"],
                 label=defn["label"],
@@ -112,6 +113,12 @@ async def seed_settings(session: AsyncSession) -> None:
                 is_secret=defn["is_secret"],
                 value=None,
             ))
+        else:
+            # Keep definition metadata in sync on existing rows (value is untouched).
+            row.label = defn["label"]
+            row.description = defn["description"]
+            row.value_type = defn["value_type"]
+            row.is_secret = defn["is_secret"]
     await session.commit()
 
 

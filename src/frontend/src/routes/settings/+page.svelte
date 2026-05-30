@@ -6,6 +6,8 @@
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
+	const timezones = Intl.supportedValuesOf('timeZone');
+
 	const SECTIONS: { title: string; keys: string[] }[] = [
 		{
 			title: 'Audiobookshelf',
@@ -67,15 +69,41 @@
 								use:enhance
 							>
 								<input type="hidden" name="key" value={setting.key} />
-								<input
-									id="input-{setting.key}"
-									type={setting.is_secret ? 'password' : 'text'}
-									name="value"
-									value={setting.is_secret ? '' : setting.display_value}
-									placeholder={setting.is_secret ? '••••••••' : ''}
-									autocomplete="off"
-									class="input flex-1"
-								/>
+								{#if setting.value_type === 'timezone'}
+									<select
+										id="input-{setting.key}"
+										name="value"
+										value={setting.display_value}
+										class="select flex-1"
+									>
+										{#if setting.display_value && !timezones.includes(setting.display_value)}
+											<option value={setting.display_value}>{setting.display_value}</option>
+										{/if}
+										{#each timezones as tz}
+											<option value={tz}>{tz}</option>
+										{/each}
+									</select>
+								{:else if setting.value_type === 'int'}
+									<input
+										id="input-{setting.key}"
+										type="number"
+										min="1"
+										step="1"
+										name="value"
+										value={setting.display_value}
+										class="input flex-1"
+									/>
+								{:else}
+									<input
+										id="input-{setting.key}"
+										type={setting.is_secret ? 'password' : 'text'}
+										name="value"
+										value={setting.is_secret ? '' : setting.display_value}
+										placeholder={setting.is_secret ? '••••••••' : ''}
+										autocomplete="off"
+										class="input flex-1"
+									/>
+								{/if}
 								<button type="submit" class="btn preset-tonal">Save</button>
 							</form>
 
