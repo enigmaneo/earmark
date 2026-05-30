@@ -13,6 +13,12 @@ post {
 body:json {
   {
     "username": "{{username}}",
-    "password": "{{password}}"
+    "password": "{{password_hash}}"
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setVar('username', res.body.username);
   }
 }
