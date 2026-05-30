@@ -11,11 +11,13 @@ _DOWNLOAD_TIMEOUT = httpx.Timeout(10.0, read=300.0)
 
 
 class AudiobookshelfClient:
-    def __init__(self) -> None:
-        logger.debug("AudiobookshelfClient connecting to %s", settings.audiobookshelf_url)
+    def __init__(self, url: str | None = None, api_key: str | None = None) -> None:
+        _url = url if url is not None else settings.audiobookshelf_url
+        _api_key = api_key if api_key is not None else settings.audiobookshelf_api_key
+        logger.debug("AudiobookshelfClient connecting to %s", _url)
         self._client = httpx.AsyncClient(
-            base_url=settings.audiobookshelf_url,
-            headers={"Authorization": f"Bearer {settings.audiobookshelf_api_key}"},
+            base_url=_url,
+            headers={"Authorization": f"Bearer {_api_key}"},
             timeout=10.0,
         )
 

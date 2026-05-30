@@ -16,3 +16,18 @@ body:json {
     "password": "{{web_password}}"
   }
 }
+
+script:post-response {
+  if (res.status === 201) {
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const loginRes = await fetch(`${bru.getEnvVar('base_url')}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: body.email, password: body.password })
+    });
+    const data = await loginRes.json();
+    if (data.access_token) {
+      bru.setVar('jwt_token', data.access_token);
+    }
+  }
+}

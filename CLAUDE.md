@@ -26,6 +26,7 @@ Project documentation lives in `docs/`:
 - [`docs/CalibreWebIntegration.md`](docs/CalibreWebIntegration.md) — Calibre Web (OPDS) ebook source
 - [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) — Alignment pipeline testing guide
 - [`docs/Sync.md`](docs/Sync.md) — Bidirectional ABS ↔ KOSync progress sync
+- [`docs/Settings.md`](docs/Settings.md) — DB-backed settings system, override precedence, secret encryption
 
 ## Rules
 

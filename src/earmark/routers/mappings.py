@@ -3,14 +3,24 @@ import logging
 import shutil
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from earmark.app_settings import get_effective_str
 from earmark.config import settings
 from earmark.database import get_session
 from earmark.earmark_auth import get_current_earmark_user
-from earmark.models import AbsEbookMapping, AbsLibraryItem, AlignmentJob, EbookMetadataCache, KosyncUser, ReadingProgress, User
+from earmark.models import (
+    AbsEbookMapping,
+    AbsLibraryItem,
+    AlignmentJob,
+    EbookMetadataCache,
+    KosyncUser,
+    ReadingProgress,
+    User,
+)
 from earmark.schemas import (
     AbsItemSummary,
     EbookCandidate,
@@ -18,13 +28,11 @@ from earmark.schemas import (
     MappingCreate,
     MappingRead,
 )
-from earmark.utils import partial_md5, safe_subpath
 from earmark.services.alignment import ACTIVE_STATUSES, run_alignment_job
 from earmark.services.audiobookshelf import AudiobookshelfClient
 from earmark.services.ebook_sources import CalibreOpdsSource
 from earmark.services.progress import backfill_progress_titles
-
-import httpx
+from earmark.utils import partial_md5, safe_subpath
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +129,15 @@ async def list_abs_items(
     _user: User = Depends(get_current_earmark_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[AbsItemSummary]:
-    if settings.audiobookshelf_url and settings.audiobookshelf_api_key:
+    abs_url = await get_effective_str(
+        "audiobookshelf_url", settings.audiobookshelf_url, session
+    )
+    abs_key = await get_effective_str(
+        "audiobookshelf_api_key", settings.audiobookshelf_api_key, session
+    )
+    if abs_url and abs_key:
         try:
-            client = AudiobookshelfClient()
+            client = AudiobookshelfClient(url=abs_url, api_key=abs_key)
             try:
                 libraries = await client.list_libraries()
                 items: list[AbsItemSummary] = []
@@ -146,7 +160,7 @@ async def list_abs_items(
         except Exception:
             logger.error(
                 "Failed to fetch library items from Audiobookshelf at %s",
-                settings.audiobookshelf_url,
+                abs_url,
                 exc_info=True,
             )
             raise HTTPException(
@@ -301,15 +315,23 @@ async def list_calibre_ebooks(
     _user: User = Depends(get_current_earmark_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[EbookCandidate]:
-    if not settings.cwa_url:
+    cwa_url = await get_effective_str("cwa_url", settings.cwa_url, session)
+    if not cwa_url:
         raise HTTPException(
             status_code=503, detail="Calibre Web is not configured (CWA_URL is unset)."
         )
 
+    abs_url = await get_effective_str(
+        "audiobookshelf_url", settings.audiobookshelf_url, session
+    )
+    abs_key = await get_effective_str(
+        "audiobookshelf_api_key", settings.audiobookshelf_api_key, session
+    )
+
     title: str = ""
     author: str | None = None
-    if settings.audiobookshelf_url and settings.audiobookshelf_api_key:
-        client = AudiobookshelfClient()
+    if abs_url and abs_key:
+        client = AudiobookshelfClient(url=abs_url, api_key=abs_key)
         try:
             item = await client.get_item(abs_item_id)
             metadata = item.get("media", {}).get("metadata", {})
@@ -332,7 +354,9 @@ async def list_calibre_ebooks(
     if not title:
         raise HTTPException(status_code=404, detail="Unknown ABS item")
 
-    source = CalibreOpdsSource()
+    cwa_username = await get_effective_str("cwa_username", settings.cwa_username, session)
+    cwa_password = await get_effective_str("cwa_password", settings.cwa_password, session)
+    source = CalibreOpdsSource(base_url=cwa_url, username=cwa_username, password=cwa_password)
     try:
         return await source.search(title, author)
     except httpx.HTTPStatusError as exc:

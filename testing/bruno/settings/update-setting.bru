@@ -1,0 +1,25 @@
+meta {
+  name: Update Setting
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{base_url}}/web/settings/:key
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+params:path {
+  key: audiobookshelf_url
+}
+
+body:json {
+  {
+    "value": "http://localhost:13378"
+  }
+}

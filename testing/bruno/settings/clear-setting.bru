@@ -1,0 +1,19 @@
+meta {
+  name: Clear Setting
+  type: http
+  seq: 3
+}
+
+delete {
+  url: {{base_url}}/web/settings/:key
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+params:path {
+  key: audiobookshelf_url
+}

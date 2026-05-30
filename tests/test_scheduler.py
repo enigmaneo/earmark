@@ -87,7 +87,7 @@ def patch_scheduler(monkeypatch, db_session_factory: async_sessionmaker):
     """Point sync_progress at the in-memory test DB and a default abs client."""
     monkeypatch.setattr(scheduler, "AsyncSessionLocal", db_session_factory)
     client = _mock_abs_client()
-    monkeypatch.setattr(scheduler, "AudiobookshelfClient", lambda: client)
+    monkeypatch.setattr(scheduler, "AudiobookshelfClient", lambda **kwargs: client)
     # Reset the shared status record between tests.
     scheduler.sync_status.last_run_at = None
     scheduler.sync_status.last_error = None
@@ -167,7 +167,7 @@ async def test_sync_progress_isolates_per_mapping_errors(
 
     calls: list[str] = []
 
-    async def fake_sync_mapping(mapping, abs_client, session):
+    async def fake_sync_mapping(mapping, abs_client, session, idle_threshold):
         calls.append(mapping.abs_item_id)
         if mapping.abs_item_id == "li_a":
             raise RuntimeError("boom")
