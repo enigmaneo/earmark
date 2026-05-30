@@ -122,10 +122,10 @@
 			<tbody>
 				{#each items as item (item.id)}
 					<tr>
-						<td class="max-w-xs truncate">{item.title}</td>
-						<td class="max-w-xs truncate font-mono text-xs text-surface-500">{item.document}</td>
+						<td class="max-w-xs truncate" title={item.title}>{item.title}</td>
+						<td class="max-w-xs truncate font-mono text-xs text-surface-500" title={item.document}>{item.document}</td>
 						<td>{formatPercent(item.percentage)}</td>
-						<td class="max-w-xs truncate font-mono text-xs">{item.progress}</td>
+						<td class="max-w-xs truncate font-mono text-xs" title={item.progress}>{item.progress}</td>
 						<td>{item.device}</td>
 						<td>{item.is_latest ? '✓' : ''}</td>
 						<td>{formatDate(item.timestamp)}</td>
