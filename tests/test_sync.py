@@ -32,6 +32,10 @@ SYNC_MAP = [
 
 DURATION = 400.0
 
+# Matches the config default (settings.sync_abs_idle_seconds); the scenarios below use
+# lastUpdate values well outside this window so the stopped/playing distinction is unambiguous.
+IDLE_THRESHOLD = 360
+
 
 def _stopped_ms() -> int:
     """ABS lastUpdate (Unix ms) old enough to count as stopped (past the idle threshold)."""
@@ -320,7 +324,7 @@ async def test_sync_abs_newer_writes_kosync(
         abs_data = {"currentTime": 50.0, "duration": DURATION, "lastUpdate": _stopped_ms()}
         client = _make_abs_client(abs_data)
 
-        await _sync_mapping(mapping, client, session)
+        await _sync_mapping(mapping, client, session, IDLE_THRESHOLD)
 
         result = await session.execute(
             select(ReadingProgress)
@@ -344,7 +348,7 @@ async def test_sync_abs_newer_writes_all_kosync_users(
         abs_data = {"currentTime": 50.0, "duration": DURATION, "lastUpdate": _stopped_ms()}
         client = _make_abs_client(abs_data)
 
-        await _sync_mapping(mapping, client, session)
+        await _sync_mapping(mapping, client, session, IDLE_THRESHOLD)
 
         result = await session.execute(
             select(ReadingProgress)
@@ -368,7 +372,7 @@ async def test_sync_abs_playing_defers_kosync_write(
         abs_data = {"currentTime": 50.0, "duration": DURATION, "lastUpdate": now_ms}
         client = _make_abs_client(abs_data)
 
-        await _sync_mapping(mapping, client, session)
+        await _sync_mapping(mapping, client, session, IDLE_THRESHOLD)
 
         result = await session.execute(
             select(ReadingProgress)
@@ -413,7 +417,7 @@ async def test_sync_kosync_newer_writes_abs_even_while_abs_playing(
         }
         client = _make_abs_client(abs_data)
 
-        await _sync_mapping(mapping, client, session)
+        await _sync_mapping(mapping, client, session, IDLE_THRESHOLD)
 
         client.update_progress.assert_awaited_once()
 
@@ -444,7 +448,7 @@ async def test_sync_kosync_newer_writes_abs(
 
         client = _make_abs_client(None)  # ABS has no progress
 
-        await _sync_mapping(mapping, client, session)
+        await _sync_mapping(mapping, client, session, IDLE_THRESHOLD)
 
         client.update_progress.assert_awaited_once()
         call_kwargs = client.update_progress.call_args
@@ -482,7 +486,7 @@ async def test_sync_forward_only_guard_abs_to_kosync(
         abs_data = {"currentTime": 10.0, "duration": DURATION, "lastUpdate": _stopped_ms()}
         client = _make_abs_client(abs_data)
 
-        await _sync_mapping(mapping, client, session)
+        await _sync_mapping(mapping, client, session, IDLE_THRESHOLD)
 
         # No new record should be written (only the existing koreader one exists)
         result = await session.execute(
@@ -523,7 +527,7 @@ async def test_sync_forward_only_guard_kosync_to_abs(
         abs_data = {"currentTime": 200.0, "duration": DURATION, "lastUpdate": past_ms}
         client = _make_abs_client(abs_data)
 
-        await _sync_mapping(mapping, client, session)
+        await _sync_mapping(mapping, client, session, IDLE_THRESHOLD)
 
         client.update_progress.assert_not_awaited()
 
@@ -538,7 +542,7 @@ async def test_sync_no_kosync_users_skips(
         mapping = await _setup_mapping(session, str(sync_map_file), num_kosync_users=0)
         client = _make_abs_client({"currentTime": 50.0, "duration": DURATION, "lastUpdate": 0})
 
-        await _sync_mapping(mapping, client, session)
+        await _sync_mapping(mapping, client, session, IDLE_THRESHOLD)
 
         client.get_progress.assert_not_awaited()
 
@@ -570,6 +574,6 @@ async def test_sync_docfragment_not_in_map_skips_abs_update(
         abs_data = {"currentTime": 10.0, "duration": DURATION, "lastUpdate": past_ms}
         client = _make_abs_client(abs_data)
 
-        await _sync_mapping(mapping, client, session)
+        await _sync_mapping(mapping, client, session, IDLE_THRESHOLD)
 
         client.update_progress.assert_not_awaited()
