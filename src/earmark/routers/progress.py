@@ -47,6 +47,8 @@ def _to_list_item(r: ReadingProgress) -> ProgressListItem:
         title=r.title,
         authors=r.authors,
         is_latest=r.is_latest,
+        abs_synced=r.abs_synced,
+        abs_sync_error=r.abs_sync_error,
     )
 
 
@@ -198,12 +200,6 @@ async def web_list_progress(
     if document is not None:
         where.append(ReadingProgress.document == document)
 
-    base = (
-        select(ReadingProgress)
-        .join(KosyncUser, ReadingProgress.kosync_user_id == KosyncUser.id)
-        .where(*where)
-    )
-
     col = _SORT_COLUMNS[sort_by]
     order_col = col.asc() if sort_dir == "asc" else col.desc()
 
@@ -216,7 +212,10 @@ async def web_list_progress(
     total = count_result.scalar_one()
 
     rows_result = await session.execute(
-        base.order_by(order_col, ReadingProgress.id.desc())
+        select(ReadingProgress)
+        .join(KosyncUser, ReadingProgress.kosync_user_id == KosyncUser.id)
+        .where(*where)
+        .order_by(order_col, ReadingProgress.id.desc())
         .offset((page - 1) * per_page)
         .limit(per_page)
     )

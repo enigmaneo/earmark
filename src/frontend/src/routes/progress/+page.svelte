@@ -30,6 +30,7 @@
 		{ key: 'device', label: 'Device' },
 		{ key: 'is_latest', label: 'Latest' },
 		{ key: 'updated_at', label: 'Updated' },
+		{ key: null, label: 'ABS Sync' },
 		{ key: null, label: 'Actions' },
 	];
 
@@ -129,6 +130,13 @@
 						<td>{item.device}</td>
 						<td>{item.is_latest ? '✓' : ''}</td>
 						<td>{formatDate(item.timestamp)}</td>
+						<td class="text-center">
+							{#if item.abs_synced === true}
+								<span title="Synced to ABS" class="cursor-default inline-flex items-center justify-center w-5 h-5 rounded-full bg-green-600 text-white text-xs font-bold select-none">!</span>
+							{:else if item.abs_synced === false}
+								<span title={item.abs_sync_error ?? 'Sync failed'} class="cursor-default inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-600 text-white text-xs font-bold select-none">!</span>
+							{/if}
+						</td>
 						<td>
 							<button
 								class="btn btn-sm preset-outlined-error-500"
@@ -140,7 +148,7 @@
 					</tr>
 				{:else}
 					<tr>
-						<td colspan="8" class="text-center text-surface-500">No progress entries.</td>
+						<td colspan="9" class="text-center text-surface-500">No progress entries.</td>
 					</tr>
 				{/each}
 			</tbody>
