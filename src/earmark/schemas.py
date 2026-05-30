@@ -165,6 +165,20 @@ class MappingCreate(BaseModel):
     ebook_source_ref: str | None = None
 
 
+class SettingRead(BaseModel):
+    key: str
+    label: str
+    description: str
+    value_type: str
+    is_secret: bool
+    has_db_value: bool
+    display_value: str
+
+
+class SettingUpdate(BaseModel):
+    value: str
+
+
 class MappingRead(BaseModel):
     id: int
     user_id: int

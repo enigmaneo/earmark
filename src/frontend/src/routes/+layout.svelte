@@ -32,6 +32,7 @@
 			<div class="flex gap-2">
 				<a href="/mappings" class="btn btn-sm preset-tonal">Mappings</a>
 				<a href="/progress" class="btn btn-sm preset-tonal">Progress</a>
+				<a href="/settings" class="btn btn-sm preset-tonal">Settings</a>
 			</div>
 		{/if}
 	</AppBar>

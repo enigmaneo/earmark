@@ -7,9 +7,11 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
+from earmark.app_settings import get_effective_int, seed_settings
 from earmark.config import settings
 from earmark.database import AsyncSessionLocal, init_db
 from earmark.routers import alignment, auth, mappings, progress, users
+from earmark.routers import settings as settings_router
 from earmark.routers.progress import web_router
 from earmark.scheduler import start_scheduler, stop_scheduler
 from earmark.services.alignment import recover_orphaned_jobs
@@ -37,8 +39,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_db()
+    async with AsyncSessionLocal() as session:
+        await seed_settings(session)
+        interval = await get_effective_int(
+            "sync_interval_seconds", settings.sync_interval_seconds, session
+        )
     await recover_orphaned_jobs()
-    start_scheduler()
+    start_scheduler(interval)
     yield
     stop_scheduler()
 
@@ -84,6 +91,7 @@ app.include_router(progress.router)
 app.include_router(web_router)
 app.include_router(alignment.router)
 app.include_router(mappings.router)
+app.include_router(settings_router.router)
 
 
 @app.get("/healthcheck")

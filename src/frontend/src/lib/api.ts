@@ -75,3 +75,13 @@ export type SortDir = 'asc' | 'desc';
 export interface AppConfig {
 	timezone: string;
 }
+
+export interface AppSetting {
+	key: string;
+	label: string;
+	description: string;
+	value_type: string;
+	is_secret: boolean;
+	has_db_value: boolean;
+	display_value: string;
+}

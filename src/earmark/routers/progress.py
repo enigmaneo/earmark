@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from earmark.app_settings import get_effective_str
 from earmark.auth import get_current_user
 from earmark.config import settings
 from earmark.database import get_session
@@ -162,8 +163,9 @@ web_router = APIRouter(prefix="/web", tags=["web"])
 
 
 @web_router.get("/config")
-async def web_config() -> dict[str, str]:
-    return {"timezone": settings.timezone}
+async def web_config(session: AsyncSession = Depends(get_session)) -> dict[str, str]:
+    tz = await get_effective_str("timezone", settings.timezone, session)
+    return {"timezone": tz}
 
 
 @web_router.get("/documents", response_model=list[DocumentSummary])

@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from earmark.app_settings import get_effective_int
 from earmark.config import settings
 from earmark.database import AsyncSessionLocal
 from earmark.models import AbsEbookMapping, AlignmentJob, KosyncUser, ReadingProgress, User
@@ -133,13 +134,16 @@ async def _write_abs_to_kosync(
     assert mapping.kosync_document  # caller guards this
     abs_updated_at = datetime.fromtimestamp(abs_data["lastUpdate"] / 1000, tz=UTC)
     idle = (datetime.now(UTC) - abs_updated_at).total_seconds()
-    if idle < settings.sync_abs_idle_seconds:
+    idle_threshold = await get_effective_int(
+        "sync_abs_idle_seconds", settings.sync_abs_idle_seconds, session
+    )
+    if idle < idle_threshold:
         # ABS lastUpdate is still advancing → playback is active. Defer the write so we
         # don't add a KOSync entry per sync cycle; a later cycle will write once playback
         # has stopped. Don't touch last_synced_at so the next cycle re-evaluates.
         logger.debug(
             "Deferring ABS→KOSync for %s: idle %.0fs < %ds, still playing",
-            mapping.abs_item_id, idle, settings.sync_abs_idle_seconds,
+            mapping.abs_item_id, idle, idle_threshold,
         )
         return
     ebook_pos, new_pct = _audio_to_kosync(
@@ -333,18 +337,26 @@ async def sync_progress() -> None:
     logger.info("Progress sync complete (%.2fs, %d mappings)", elapsed, synced)
 
 
-def start_scheduler() -> None:
+def start_scheduler(interval_seconds: int) -> None:
     scheduler.add_job(
         sync_progress,
         "interval",
-        seconds=settings.sync_interval_seconds,
+        seconds=interval_seconds,
         id="sync_progress",
         replace_existing=True,
         max_instances=1,  # never run two syncs concurrently
         coalesce=True,  # collapse missed runs into one
-        misfire_grace_time=settings.sync_interval_seconds,
+        misfire_grace_time=interval_seconds,
     )
     scheduler.start()
+
+
+def reschedule_sync_job(interval_seconds: int) -> None:
+    scheduler.reschedule_job(
+        "sync_progress",
+        trigger="interval",
+        seconds=interval_seconds,
+    )
 
 
 def stop_scheduler() -> None:
