@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from earmark.app_settings import (
@@ -24,9 +25,11 @@ async def list_settings(
     _user: User = Depends(get_current_earmark_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[SettingRead]:
+    rows_result = await session.execute(select(AppSetting))
+    rows_by_key = {row.key: row for row in rows_result.scalars()}
     result = []
     for defn in SETTING_DEFINITIONS:
-        row = await session.get(AppSetting, defn["key"])
+        row = rows_by_key.get(defn["key"])
         if row is None:
             row = AppSetting(
                 key=defn["key"],
@@ -56,9 +59,11 @@ async def update_setting(
 
     if defn["value_type"] == "int":
         try:
-            int(body.value)
+            parsed = int(body.value)
         except ValueError:
             raise HTTPException(status_code=422, detail=f"{key} requires an integer value")
+        if parsed < 1:
+            raise HTTPException(status_code=422, detail=f"{key} must be a positive integer")
 
     stored_value = encrypt_secret(body.value) if defn["is_secret"] else body.value
 

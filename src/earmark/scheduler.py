@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from earmark.app_settings import get_effective_int
+from earmark.app_settings import get_effective_int, get_effective_str
 from earmark.config import settings
 from earmark.database import AsyncSessionLocal
 from earmark.models import AbsEbookMapping, AlignmentJob, KosyncUser, ReadingProgress, User
@@ -128,15 +128,13 @@ async def _write_abs_to_kosync(
     abs_data: dict[str, Any],
     sync_map: list[dict[str, Any]],
     session: AsyncSession,
+    idle_threshold: int,
     *,
     min_percentage: float | None = None,
 ) -> None:
     assert mapping.kosync_document  # caller guards this
     abs_updated_at = datetime.fromtimestamp(abs_data["lastUpdate"] / 1000, tz=UTC)
     idle = (datetime.now(UTC) - abs_updated_at).total_seconds()
-    idle_threshold = await get_effective_int(
-        "sync_abs_idle_seconds", settings.sync_abs_idle_seconds, session
-    )
     if idle < idle_threshold:
         # ABS lastUpdate is still advancing → playback is active. Defer the write so we
         # don't add a KOSync entry per sync cycle; a later cycle will write once playback
@@ -214,6 +212,7 @@ async def _sync_mapping(
     mapping: AbsEbookMapping,
     abs_client: AudiobookshelfClient,
     session: AsyncSession,
+    idle_threshold: int,
 ) -> None:
     abs_item_id = mapping.abs_item_id
 
@@ -267,7 +266,7 @@ async def _sync_mapping(
 
     if ko_progress is None:
         assert abs_data is not None
-        await _write_abs_to_kosync(mapping, abs_data, sync_map, session)
+        await _write_abs_to_kosync(mapping, abs_data, sync_map, session, idle_threshold)
     elif abs_data is None:
         await _write_kosync_to_abs(mapping, ko_progress, None, abs_client, sync_map, session)
     else:
@@ -276,7 +275,7 @@ async def _sync_mapping(
         if abs_ts == ko_ts:
             return
         if abs_ts > ko_ts:
-            await _write_abs_to_kosync(mapping, abs_data, sync_map, session,
+            await _write_abs_to_kosync(mapping, abs_data, sync_map, session, idle_threshold,
                                        min_percentage=ko_progress.percentage)
         else:
             await _write_kosync_to_abs(
@@ -302,7 +301,18 @@ async def sync_progress() -> None:
             )
             mapping_ids: list[int] = list(result.scalars())
 
-        abs_client = AudiobookshelfClient()
+            # Resolve effective settings once per cycle (constant for all mappings).
+            abs_url = await get_effective_str(
+                "audiobookshelf_url", settings.audiobookshelf_url, session
+            )
+            abs_key = await get_effective_str(
+                "audiobookshelf_api_key", settings.audiobookshelf_api_key, session
+            )
+            idle_threshold = await get_effective_int(
+                "sync_abs_idle_seconds", settings.sync_abs_idle_seconds, session
+            )
+
+        abs_client = AudiobookshelfClient(url=abs_url, api_key=abs_key)
         try:
             for mapping_id in mapping_ids:
                 try:
@@ -319,7 +329,7 @@ async def sync_progress() -> None:
                         mapping = mapping_result.scalar_one_or_none()
                         if mapping is None:
                             continue
-                        await _sync_mapping(mapping, abs_client, session)
+                        await _sync_mapping(mapping, abs_client, session, idle_threshold)
                         synced += 1
                 except Exception:
                     logger.exception("Error syncing mapping %s", mapping_id)

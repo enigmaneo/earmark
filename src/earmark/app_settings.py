@@ -95,7 +95,7 @@ def encrypt_secret(value: str) -> str:
 def decrypt_secret(token: str) -> str:
     try:
         return Fernet(_derive_fernet_key()).decrypt(token.encode()).decode()
-    except (InvalidToken, Exception) as exc:
+    except (InvalidToken, ValueError, TypeError) as exc:
         raise ValueError(f"Failed to decrypt setting: {exc}") from exc
 
 
