@@ -6,7 +6,19 @@
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	const timezones = Intl.supportedValuesOf('timeZone');
+	function tzOffsetLabel(tz: string): string {
+		const parts = new Intl.DateTimeFormat('en-US', {
+			timeZone: tz,
+			timeZoneName: 'longOffset',
+		}).formatToParts(new Date());
+		const offset = parts.find((p) => p.type === 'timeZoneName')?.value ?? 'GMT';
+		return offset.replace('GMT', 'UTC');
+	}
+
+	const timezones = Intl.supportedValuesOf('timeZone').map((tz) => ({
+		value: tz,
+		label: `${tz} (${tzOffsetLabel(tz)})`,
+	}));
 
 	const SECTIONS: { title: string; keys: string[] }[] = [
 		{
@@ -76,11 +88,11 @@
 										value={setting.display_value}
 										class="select flex-1"
 									>
-										{#if setting.display_value && !timezones.includes(setting.display_value)}
+										{#if setting.display_value && !timezones.some((tz) => tz.value === setting.display_value)}
 											<option value={setting.display_value}>{setting.display_value}</option>
 										{/if}
 										{#each timezones as tz}
-											<option value={tz}>{tz}</option>
+											<option value={tz.value}>{tz.label}</option>
 										{/each}
 									</select>
 								{:else if setting.value_type === 'int'}
