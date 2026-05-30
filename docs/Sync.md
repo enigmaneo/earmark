@@ -69,7 +69,7 @@ ko_ts   = ReadingProgress.updated_at (UTC-aware)
 While an audiobook is actively playing, ABS's `lastUpdate` advances every sync cycle, which
 would otherwise produce a new KOSync entry each cycle. To collapse a listening session into a
 single write, ABS → KOSync is deferred until ABS has been idle for at least
-`SYNC_ABS_IDLE_SECONDS` (default 300). If `now - abs_lastUpdate < SYNC_ABS_IDLE_SECONDS`, the
+`SYNC_ABS_IDLE_SECONDS` (default 360). If `now - abs_lastUpdate < SYNC_ABS_IDLE_SECONDS`, the
 update is skipped for this run (and `last_synced_at` is left untouched so the next cycle
 re-evaluates). KOSync → ABS is unaffected.
 
