@@ -7,6 +7,33 @@ All pages must be fully themeable. Use Skeleton UI's built-in theme system as th
 - Define and switch themes via Skeleton UI's theme configuration
 - Extend or override theme tokens in one place; do not scatter overrides across component styles
 
+### Theme switching
+
+Users pick a theme from a dropdown on the Settings page (the "Appearance" card). Each option maps a
+friendly label to a Skeleton built-in theme applied via the `data-theme` attribute on `<html>`:
+
+| Label | Skeleton theme |
+|---|---|
+| Dark | `cerberus` |
+| Light | `wintry` |
+| Vampire | `crimson` |
+| Cyberpunk | `concord` |
+| Nord | `seafoam` |
+| Material | `modern` |
+| White | `hamlindigo` |
+| Gray | `reign` |
+
+These themes are imported in `src/app.css`; the mapping and apply/persist helpers live in
+`src/lib/theme.svelte.ts`. The choice is stored per-browser under the `earmark-theme` localStorage
+key; with nothing stored, the default follows the OS `prefers-color-scheme` (`cerberus`/`wintry`).
+An inline script in `src/app.html` applies the saved theme before first paint to avoid a flash —
+keep its theme list in sync with `theme.svelte.ts`.
+
+Most themes follow the OS light/dark setting. The **White** (`hamlindigo`) and **Gray** (`reign`)
+themes are pinned to light mode via an override in `src/app.css` (`color-scheme: light` plus
+neutralized `*-dark` body variables), so their backgrounds stay white/gray even on a dark-OS
+machine.
+
 ## Skeleton UI Components
 
 Use Skeleton UI components wherever the library provides a suitable solution. Do not build custom equivalents for things Skeleton UI already handles (buttons, modals, cards, toasts, navigation, etc.).

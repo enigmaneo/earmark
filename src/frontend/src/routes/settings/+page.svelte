@@ -3,8 +3,22 @@
 	import type { AppSetting } from '$lib/api';
 	import type { ActionData, PageData } from './$types';
 	import { toaster } from '$lib/toaster';
+	import { THEMES, getStoredTheme, applyTheme, type ThemeValue } from '$lib/theme.svelte';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
+
+	let theme = $state<ThemeValue>('cerberus');
+
+	$effect(() => {
+		// Reflect the already-applied theme (set pre-paint in app.html) in the select.
+		theme = getStoredTheme();
+	});
+
+	function onThemeChange(value: ThemeValue) {
+		theme = value;
+		applyTheme(value);
+		toaster.create({ type: 'success', title: 'Theme applied' });
+	}
 
 	function tzOffsetLabel(tz: string): string {
 		const parts = new Intl.DateTimeFormat('en-US', {
@@ -56,6 +70,27 @@
 	{#if data.loadError}
 		<aside class="alert preset-filled-error-500"><p>{data.loadError}</p></aside>
 	{/if}
+
+	<div class="card bg-surface-100-900 space-y-6 p-6">
+		<h2 class="h3">Appearance</h2>
+		<div class="space-y-2">
+			<label class="font-medium" for="input-theme">Theme</label>
+			<p class="text-surface-600-400 text-sm">
+				Choose a color palette for the app. Saved in this browser; defaults to your system
+				light/dark setting.
+			</p>
+			<select
+				id="input-theme"
+				class="select w-full"
+				value={theme}
+				onchange={(e) => onThemeChange(e.currentTarget.value as ThemeValue)}
+			>
+				{#each THEMES as t}
+					<option value={t.value}>{t.label}</option>
+				{/each}
+			</select>
+		</div>
+	</div>
 
 	{#each SECTIONS as section}
 		{@const sectionSettings = section.keys.map((k) => settingsByKey[k]).filter(Boolean)}

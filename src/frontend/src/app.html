@@ -4,6 +4,17 @@
 		<meta charset="utf-8" />
 		<link rel="icon" href="%sveltekit.assets%/favicon.png" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<script>
+			// Apply the saved theme before first paint to avoid a flash of the default.
+			// Keep the known values in sync with src/lib/theme.svelte.ts.
+			(function () {
+				var themes = ['cerberus', 'wintry', 'crimson', 'concord', 'seafoam', 'modern', 'hamlindigo', 'reign'];
+				var stored = localStorage.getItem('earmark-theme');
+				var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+				var theme = themes.indexOf(stored) !== -1 ? stored : prefersDark ? 'cerberus' : 'wintry';
+				document.documentElement.dataset.theme = theme;
+			})();
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
