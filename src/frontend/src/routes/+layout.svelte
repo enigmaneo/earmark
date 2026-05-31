@@ -20,7 +20,10 @@
 <div class="flex h-full flex-col">
 	<AppBar>
 		<div class="flex w-full items-center justify-between">
-			<strong class="text-xl">earmark</strong>
+			<a href="/" class="flex items-center gap-2">
+				<img src="/logo-mark.png" alt="" class="h-8 w-8" />
+				<strong class="text-xl">earmark</strong>
+			</a>
 			{#if data.user}
 				<div class="flex items-center gap-3">
 					<span class="text-surface-600-400 text-sm">{data.user.email}</span>

@@ -1,7 +1,44 @@
 @import 'tailwindcss';
 @import '@skeletonlabs/skeleton/themes/cerberus';
+@import '@skeletonlabs/skeleton/themes/wintry';
+@import '@skeletonlabs/skeleton/themes/crimson';
+@import '@skeletonlabs/skeleton/themes/concord';
+@import '@skeletonlabs/skeleton/themes/seafoam';
+@import '@skeletonlabs/skeleton/themes/modern';
+@import '@skeletonlabs/skeleton/themes/hamlindigo';
+@import '@skeletonlabs/skeleton/themes/reign';
 @import '@skeletonlabs/skeleton';
 
 @theme {
 	--font-sans: ui-sans-serif, system-ui, sans-serif;
+}
+
+/* These two themes stay light regardless of the OS color-scheme. */
+[data-theme='hamlindigo'],
+[data-theme='reign'] {
+	color-scheme: light;
+	--body-background-color-dark: var(--body-background-color);
+	--base-font-color-dark: var(--base-font-color);
+}
+
+/* Swap the full logo to its dark-background variant under a dark color-scheme.
+   hamlindigo/reign are force-light above, so they keep the light logo. */
+.logo-dark {
+	display: none;
+}
+@media (prefers-color-scheme: dark) {
+	.logo-light {
+		display: none;
+	}
+	.logo-dark {
+		display: block;
+	}
+	[data-theme='hamlindigo'] .logo-light,
+	[data-theme='reign'] .logo-light {
+		display: block;
+	}
+	[data-theme='hamlindigo'] .logo-dark,
+	[data-theme='reign'] .logo-dark {
+		display: none;
+	}
 }
