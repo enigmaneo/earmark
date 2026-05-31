@@ -343,8 +343,8 @@
 						class="hover:bg-surface-200-800 transition-colors {m.kosync_document ? 'cursor-pointer' : ''}"
 						onclick={() => handleRowClick(m)}
 					>
-						<td class="max-w-xs truncate">{m.abs_title}</td>
-						<td class="max-w-xs truncate">{m.abs_author ?? '—'}</td>
+						<td class="max-w-xs truncate" title={m.abs_title}>{m.abs_title}</td>
+						<td class="max-w-xs truncate" title={m.abs_author ?? '—'}>{m.abs_author ?? '—'}</td>
 						<td>
 							{#if ACTIVE_STATUSES.has(m.sync_status ?? '')}
 								<span class="text-xs tabular-nums">{m.sync_progress ?? 0}%</span>

@@ -197,12 +197,21 @@ async def _write_kosync_to_abs(
             abs_data["currentTime"] / duration * 100 if duration else 0.0,
         )
         return
-    await abs_client.update_progress(
-        mapping.abs_item_id,
-        current_time=audio_time,
-        duration=abs_data["duration"] if abs_data else 0.0,
-        progress=ko_progress.percentage,
-    )
+    try:
+        await abs_client.update_progress(
+            mapping.abs_item_id,
+            current_time=audio_time,
+            duration=abs_data["duration"] if abs_data else 0.0,
+            progress=ko_progress.percentage,
+        )
+    except Exception as exc:
+        ko_progress.abs_synced = False
+        ko_progress.abs_sync_error = str(exc)
+        await session.commit()
+        logger.error("KOSync→ABS failed for %s: %s", mapping.abs_item_id, exc)
+        return
+    ko_progress.abs_synced = True
+    ko_progress.abs_sync_error = None
     mapping.last_synced_at = datetime.now(UTC)
     await session.commit()
     logger.info("KOSync→ABS %s: %.4f%%", mapping.abs_item_id, ko_progress.percentage)

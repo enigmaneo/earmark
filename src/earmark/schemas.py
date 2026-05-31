@@ -73,6 +73,8 @@ class ProgressListItem(ProgressResponse):
     title: str | None = None
     authors: str | None = None
     is_latest: bool | None = None
+    abs_synced: bool | None = None
+    abs_sync_error: str | None = None
 
 
 class DocumentSummary(BaseModel):
