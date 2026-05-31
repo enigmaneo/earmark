@@ -116,6 +116,30 @@ def recolor_dark_wordmark(img: Image.Image, gap_y: int, light=(236, 236, 236)) -
     return Image.fromarray(arr, "RGBA")
 
 
+def clear_wordmark_counters(img: Image.Image, gap_y: int) -> Image.Image:
+    """Make enclosed white letter counters in the wordmark transparent.
+
+    The border flood-fill in load_rgba_with_transparent_bg can't reach white
+    that is enclosed by letter strokes (the eye of the 'e', the bowls of the
+    'a's), so those stay opaque. The wordmark region (below gap_y) has no
+    intended white fill, so any near-white grey here is background: fade its
+    alpha out, linearly across a small band so edges stay smooth. Must run
+    before recolor_dark_wordmark so it applies to both variants.
+    """
+    arr = np.asarray(img).copy().astype(np.int16)
+    region = arr[gap_y:, :, :]
+    r, g, b = region[..., 0], region[..., 1], region[..., 2]
+    minc = np.minimum(np.minimum(r, g), b)
+    maxc = np.maximum(np.maximum(r, g), b)
+    greyish = (maxc - minc) < 30
+    # minc>=245 -> fully transparent, <=200 -> opaque, linear between.
+    factor = np.clip((245 - minc) / 45.0, 0.0, 1.0)
+    factor = np.where(greyish, factor, 1.0)
+    region[..., 3] = np.minimum(region[..., 3], (factor * 255).astype(np.int16))
+    arr[gap_y:, :, :] = region
+    return Image.fromarray(arr.astype(np.uint8), "RGBA")
+
+
 def square_pad(img: Image.Image) -> Image.Image:
     side = max(img.width, img.height)
     canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
@@ -145,6 +169,7 @@ def write_previews(assets: dict[str, Image.Image]) -> None:
 def main() -> None:
     full = trim(load_rgba_with_transparent_bg(SOURCE))
     gap_y = split_dog_and_wordmark(full)
+    full = clear_wordmark_counters(full, gap_y)
 
     # Full logo variants
     logo_light = full
