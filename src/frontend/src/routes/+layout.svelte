@@ -1,5 +1,6 @@
 <script lang="ts">
 	import '../app.css';
+	import { enhance } from '$app/forms';
 	import { AppBar, Toast } from '@skeletonlabs/skeleton-svelte';
 	import { toaster } from '$lib/toaster';
 	import type { LayoutData } from './$types';
@@ -27,7 +28,9 @@
 			{#if data.user}
 				<div class="flex items-center gap-3">
 					<span class="text-surface-600-400 text-sm">{data.user.email}</span>
-					<a href="/logout" class="btn btn-sm preset-tonal">Sign out</a>
+					<form method="POST" action="/logout" use:enhance>
+						<button type="submit" class="btn btn-sm preset-tonal">Sign out</button>
+					</form>
 				</div>
 			{/if}
 		</div>
