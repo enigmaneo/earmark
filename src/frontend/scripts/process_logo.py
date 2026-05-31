@@ -183,19 +183,31 @@ def main() -> None:
     save(logo_light, "logo-light.png")
     save(logo_dark, "logo-dark.png")
 
-    # Dog mark: crop above the gap, then square-pad
+    # Dog mark (navbar): full dog cropped above the gap, square-padded.
     dog = trim(square_pad(full.crop((0, 0, full.width, gap_y))))
     dog = square_pad(dog)
     save(dog.resize((96, 96), Image.LANCZOS), "logo-mark.png")
-    save(dog.resize((180, 180), Image.LANCZOS), "apple-touch-icon.png")
-    save(dog.resize((32, 32), Image.LANCZOS), "favicon.png")
+
+    # Favicon / touch icon: a tight crop of the dog's head reads far better at
+    # tab size than the busy full-body dog. Fractions of the trimmed full-dog.
+    dw, dh = dog.size
+    head = trim(dog.crop((int(dw * 0.20), int(dh * 0.04), int(dw * 0.82), int(dh * 0.66))))
+    head = square_pad(head)
+    save(head.resize((180, 180), Image.LANCZOS), "apple-touch-icon.png")
+    fav32 = head.resize((32, 32), Image.LANCZOS)
+    save(fav32, "favicon.png")
+    # Multi-size .ico so browsers that auto-request /favicon.ico get a real icon.
+    head.resize((48, 48), Image.LANCZOS).save(
+        os.path.join(STATIC, "favicon.ico"), sizes=[(16, 16), (32, 32), (48, 48)]
+    )
+    print(f"wrote {os.path.join(STATIC, 'favicon.ico')} (16/32/48)")
 
     write_previews(
         {
             "logo-light.png": logo_light,
             "logo-dark.png": logo_dark,
             "logo-mark.png": dog.resize((96, 96), Image.LANCZOS),
-            "favicon.png": dog.resize((32, 32), Image.LANCZOS),
+            "favicon.png": fav32,
         }
     )
 
