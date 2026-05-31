@@ -20,3 +20,25 @@
 	--body-background-color-dark: var(--body-background-color);
 	--base-font-color-dark: var(--base-font-color);
 }
+
+/* Swap the full logo to its dark-background variant under a dark color-scheme.
+   hamlindigo/reign are force-light above, so they keep the light logo. */
+.logo-dark {
+	display: none;
+}
+@media (prefers-color-scheme: dark) {
+	.logo-light {
+		display: none;
+	}
+	.logo-dark {
+		display: block;
+	}
+	[data-theme='hamlindigo'] .logo-light,
+	[data-theme='reign'] .logo-light {
+		display: block;
+	}
+	[data-theme='hamlindigo'] .logo-dark,
+	[data-theme='reign'] .logo-dark {
+		display: none;
+	}
+}

@@ -7,6 +7,8 @@
 
 <div class="flex min-h-full items-center justify-center p-8">
 	<div class="card bg-surface-100-900 w-full max-w-sm space-y-6 p-8">
+		<img src="/logo-light.png" alt="earmark" class="logo-light mx-auto h-20" />
+		<img src="/logo-dark.png" alt="earmark" class="logo-dark mx-auto h-20" />
 		<div>
 			<h1 class="h2">Create account</h1>
 			<p class="text-surface-600-400 mt-1 text-sm">Start syncing your reading progress</p>
