@@ -26,9 +26,10 @@ def _configure_logging() -> None:
             format="%(message)s",
             datefmt="[%X]",
             handlers=[RichHandler(rich_tracebacks=True)],
+            force=True,
         )
     else:
-        logging.basicConfig(level=level)
+        logging.basicConfig(level=level, force=True)
 
 
 _configure_logging()
@@ -39,6 +40,9 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_db()
+    # Alembic's fileConfig (run by init_db) resets the root logger to alembic.ini's
+    # WARNING level; re-assert the app's logging config so INFO logs keep flowing.
+    _configure_logging()
     async with AsyncSessionLocal() as session:
         await seed_settings(session)
         interval = await get_effective_int(

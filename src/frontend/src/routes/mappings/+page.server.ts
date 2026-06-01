@@ -2,6 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import type { AbsItemSummary, EbookFileSummary, MappingRead } from '$lib/api';
 import type { Actions, PageServerLoad } from './$types';
 import { config } from '$lib/server/config';
+import { getSettings, getSetting } from '$lib/server/settings';
 
 const BACKEND = config.backendUrl;
 
@@ -9,6 +10,7 @@ export const load: PageServerLoad = async ({ cookies }): Promise<{
 	absItems: AbsItemSummary[];
 	ebookFiles: EbookFileSummary[];
 	mappings: MappingRead[];
+	calibreConfigured: boolean;
 	loadError: string | null;
 }> => {
 	const token = cookies.get('earmark_session');
@@ -17,23 +19,24 @@ export const load: PageServerLoad = async ({ cookies }): Promise<{
 	const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
 	try {
-		const [absItemsRes, ebookFilesRes, mappingsRes] = await Promise.all([
+		const [absItemsRes, ebookFilesRes, mappingsRes, appSettings] = await Promise.all([
 			fetch(`${BACKEND}/web/abs-items`, { headers }),
 			fetch(`${BACKEND}/web/ebook-files`, { headers }),
 			fetch(`${BACKEND}/web/mappings`, { headers }),
+			getSettings(token),
 		]);
 
 		if (!absItemsRes.ok) {
 			const body = await absItemsRes.json().catch(() => ({}));
-			return { absItems: [], ebookFiles: [], mappings: [], loadError: body.detail ?? 'Failed to load audiobooks' };
+			return { absItems: [], ebookFiles: [], mappings: [], calibreConfigured: false, loadError: body.detail ?? 'Failed to load audiobooks' };
 		}
 		if (!ebookFilesRes.ok) {
 			const body = await ebookFilesRes.json().catch(() => ({}));
-			return { absItems: [], ebookFiles: [], mappings: [], loadError: body.detail ?? 'Failed to load ebook files' };
+			return { absItems: [], ebookFiles: [], mappings: [], calibreConfigured: false, loadError: body.detail ?? 'Failed to load ebook files' };
 		}
 		if (!mappingsRes.ok) {
 			const body = await mappingsRes.json().catch(() => ({}));
-			return { absItems: [], ebookFiles: [], mappings: [], loadError: body.detail ?? 'Failed to load mappings' };
+			return { absItems: [], ebookFiles: [], mappings: [], calibreConfigured: false, loadError: body.detail ?? 'Failed to load mappings' };
 		}
 
 		const [absItems, ebookFiles, mappings] = await Promise.all([
@@ -42,9 +45,11 @@ export const load: PageServerLoad = async ({ cookies }): Promise<{
 			mappingsRes.json(),
 		]);
 
-		return { absItems, ebookFiles, mappings, loadError: null };
+		const calibreConfigured = !!(getSetting(appSettings, 'cwa_url')?.display_value);
+
+		return { absItems, ebookFiles, mappings, calibreConfigured, loadError: null };
 	} catch {
-		return { absItems: [], ebookFiles: [], mappings: [], loadError: 'Failed to load page data' };
+		return { absItems: [], ebookFiles: [], mappings: [], calibreConfigured: false, loadError: 'Failed to load page data' };
 	}
 };
 

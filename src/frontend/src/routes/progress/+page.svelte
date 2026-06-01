@@ -90,7 +90,7 @@
 		<select
 			id="doc-select"
 			class="select w-72"
-			value={selectedDocument}
+			bind:value={selectedDocument}
 			onchange={handleDocumentChange}
 		>
 			<option value="">All documents</option>
@@ -99,6 +99,13 @@
 			{/each}
 		</select>
 		<span class="text-surface-500 text-sm">{total} entries</span>
+		{#if data.mappedAbsItemId}
+			<img
+				src="/mappings/cover?abs_item_id={encodeURIComponent(data.mappedAbsItemId)}"
+				alt="Audiobook cover"
+				class="ml-auto h-16 w-auto rounded shadow"
+			/>
+		{/if}
 	</div>
 
 	<div class="table-wrap">

@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -172,6 +172,33 @@ async def list_abs_items(
     return [
         AbsItemSummary(abs_item_id=r.abs_item_id, title=r.title, author=r.author) for r in rows
     ]
+
+
+@router.get("/abs-items/{abs_item_id}/cover")
+async def get_abs_item_cover(
+    abs_item_id: str,
+    _user: User = Depends(get_current_earmark_user),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    abs_url = await get_effective_str(
+        "audiobookshelf_url", settings.audiobookshelf_url, session
+    )
+    abs_key = await get_effective_str(
+        "audiobookshelf_api_key", settings.audiobookshelf_api_key, session
+    )
+    if not (abs_url and abs_key):
+        raise HTTPException(status_code=404, detail="Audiobookshelf not configured")
+    client = AudiobookshelfClient(url=abs_url, api_key=abs_key)
+    try:
+        content, content_type = await client.get_item_cover(abs_item_id)
+    except Exception:
+        logger.error("Failed to fetch cover for %s", abs_item_id, exc_info=True)
+        raise HTTPException(status_code=404, detail="Cover not found")
+    finally:
+        await client.close()
+    return Response(
+        content=content, media_type=content_type, headers={"Cache-Control": "max-age=3600"}
+    )
 
 
 @router.get("/ebook-files", response_model=list[EbookFileSummary])

@@ -42,6 +42,11 @@ class AudiobookshelfClient:
         response.raise_for_status()
         return response.json()  # type: ignore[no-any-return]
 
+    async def get_item_cover(self, item_id: str) -> tuple[bytes, str]:
+        response = await self._client.get(f"/api/items/{item_id}/cover")
+        response.raise_for_status()
+        return response.content, response.headers.get("content-type", "image/jpeg")
+
     async def download_audio_file(self, item_id: str, file_id: str, dest_path: Path) -> None:
         url = f"/api/items/{item_id}/file/{file_id}"
         async with self._client.stream("GET", url, timeout=_DOWNLOAD_TIMEOUT) as response:

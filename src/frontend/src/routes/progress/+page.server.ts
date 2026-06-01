@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
-import type { SortBy, SortDir } from '$lib/api';
+import type { SortBy, SortDir, MappingRead } from '$lib/api';
 import { config } from '$lib/server/config';
 
 const BACKEND = config.backendUrl;
@@ -17,7 +17,7 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
 	const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
 	try {
-		const [documentsRes, progressRes] = await Promise.all([
+		const [documentsRes, progressRes, mappingsRes] = await Promise.all([
 			fetch(`${BACKEND}/web/documents`, { headers }),
 			fetch(
 				`${BACKEND}/web/progress?${new URLSearchParams({
@@ -28,6 +28,7 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
 				})}`,
 				{ headers }
 			),
+			fetch(`${BACKEND}/web/mappings`, { headers }),
 		]);
 
 		if (!documentsRes.ok || !progressRes.ok) {
@@ -39,6 +40,7 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
 				sort_by,
 				sort_dir,
 				page,
+				mappedAbsItemId: null,
 				loadError: `Failed to load ${failed} data`,
 			};
 		}
@@ -48,7 +50,22 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
 			progressRes.json(),
 		]);
 
-		return { documents, progressList, document, sort_by, sort_dir, page, loadError: null };
+		let mappedAbsItemId: string | null = null;
+		if (document && mappingsRes.ok) {
+			const mappings = (await mappingsRes.json()) as MappingRead[];
+			mappedAbsItemId = mappings.find((m) => m.kosync_document === document)?.abs_item_id ?? null;
+		}
+
+		return {
+			documents,
+			progressList,
+			document,
+			sort_by,
+			sort_dir,
+			page,
+			mappedAbsItemId,
+			loadError: null,
+		};
 	} catch {
 		return {
 			documents: [],
@@ -57,6 +74,7 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
 			sort_by,
 			sort_dir,
 			page,
+			mappedAbsItemId: null,
 			loadError: 'Failed to load data',
 		};
 	}

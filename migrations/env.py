@@ -20,7 +20,10 @@ config.set_main_option("sqlalchemy.url", sync_database_url(settings.database_url
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: env.py runs in-process during app startup
+    # (init_db -> alembic upgrade). The default (True) would disable the app's
+    # already-configured earmark.* loggers, silencing all logging after migrations.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Models' metadata for 'autogenerate' support.
 target_metadata = Base.metadata
