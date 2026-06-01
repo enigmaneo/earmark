@@ -222,7 +222,7 @@
 				value={selectedSource === 'calibre' ? selectedCalibreRef : ''}
 			/>
 
-			<label class="label">
+			<label class="label self-start">
 				<span>ABS Audiobook</span>
 				{#if availableAbsItems.length === 0}
 					<select class="select" disabled>
@@ -239,6 +239,16 @@
 					</select>
 				{/if}
 			</label>
+
+			{#if selectedAbsItemId}
+				<div class="hidden items-center justify-center sm:flex">
+					<img
+						src="/mappings/cover?abs_item_id={encodeURIComponent(selectedAbsItemId)}"
+						alt="Cover of {selectedAbs?.title ?? 'selected audiobook'}"
+						class="max-h-48 w-auto rounded shadow-lg"
+					/>
+				</div>
+			{/if}
 
 			<fieldset class="label sm:col-span-2">
 				<legend>Ebook source</legend>

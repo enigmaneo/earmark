@@ -366,6 +366,7 @@ def start_scheduler(interval_seconds: int) -> None:
         max_instances=1,  # never run two syncs concurrently
         coalesce=True,  # collapse missed runs into one
         misfire_grace_time=interval_seconds,
+        next_run_time=datetime.now(UTC),
     )
     scheduler.start()
 

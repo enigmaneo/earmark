@@ -51,11 +51,12 @@ async def write_reading_progress(
         )
     ).scalar_one_or_none()
 
-    if (
-        existing_latest is not None
-        and existing_latest.progress == progress
-        and existing_latest.percentage == percentage
-    ):
+    if existing_latest is not None and existing_latest.progress == progress:
+        # Same ebook position — update metadata in-place rather than creating a new row.
+        if existing_latest.percentage != percentage:
+            existing_latest.percentage = percentage
+            existing_latest.updated_at = updated_at or datetime.now(UTC)
+            await session.commit()
         return existing_latest
 
     result = await session.execute(
