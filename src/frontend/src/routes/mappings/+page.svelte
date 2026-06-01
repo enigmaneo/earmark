@@ -18,7 +18,7 @@
 	let mappings = $state<MappingRead[]>([]);
 	let selectedAbsItemId = $state<string>('');
 	let selectedEbookPath = $state<string>('');
-	let selectedSource = $state<EbookSource>('local');
+	let selectedSource = $state<EbookSource>(data.calibreConfigured ? 'calibre' : 'local');
 	let selectedCalibreRef = $state<string>('');
 	let calibreCandidates = $state<EbookCandidate[]>([]);
 	let calibreLoading = $state(false);
