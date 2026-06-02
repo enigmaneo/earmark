@@ -109,7 +109,18 @@
 	</div>
 
 	<div class="table-wrap">
-		<table class="table table-hover">
+		<table class="table table-hover" style="table-layout: fixed; width: 100%;">
+			<colgroup>
+				<col class="w-[18%]" /> <!-- Title -->
+				<col class="w-[16%]" /> <!-- Document -->
+				<col class="w-[8%]" />  <!-- Percentage -->
+				<col class="w-[13%]" /> <!-- Progress -->
+				<col class="w-[10%]" /> <!-- Device -->
+				<col class="w-[6%]" />  <!-- Latest -->
+				<col class="w-[13%]" /> <!-- Updated -->
+				<col class="w-[8%]" />  <!-- ABS Sync -->
+				<col class="w-[8%]" />  <!-- Actions -->
+			</colgroup>
 			<thead>
 				<tr>
 					{#each columns as col}
@@ -134,9 +145,9 @@
 						<td class="max-w-xs truncate font-mono text-xs text-surface-500" title={item.document}>{item.document}</td>
 						<td>{formatPercent(item.percentage)}</td>
 						<td class="max-w-xs truncate font-mono text-xs" title={item.progress}>{item.progress}</td>
-						<td>{item.device}</td>
+						<td class="truncate" title={item.device}>{item.device}</td>
 						<td>{item.is_latest ? '✓' : ''}</td>
-						<td>{formatDate(item.timestamp)}</td>
+						<td class="truncate">{formatDate(item.timestamp)}</td>
 						<td class="text-center">
 							{#if item.abs_synced === true}
 								<span title="Synced to ABS" class="cursor-default inline-flex items-center justify-center w-5 h-5 rounded-full bg-green-600 text-white text-xs font-bold select-none">!</span>

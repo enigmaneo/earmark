@@ -336,7 +336,15 @@
 	</div>
 
 	<div class="table-wrap">
-		<table class="table table-hover">
+		<table class="table table-hover" style="table-layout: fixed; width: 100%;">
+			<colgroup>
+				<col class="w-[27%]" /> <!-- Audiobook -->
+				<col class="w-[18%]" /> <!-- Author -->
+				<col class="w-[9%]" />  <!-- Mapping -->
+				<col class="w-[13%]" /> <!-- Progress -->
+				<col class="w-[14%]" /> <!-- Created -->
+				<col class="w-[19%]" /> <!-- Actions -->
+			</colgroup>
 			<thead>
 				<tr>
 					<th>Audiobook</th>
@@ -366,7 +374,7 @@
 								<span class="badge preset-filled-warning-500 text-xs">Unmapped</span>
 							{/if}
 						</td>
-						<td class="min-w-[140px]">
+						<td>
 							{#if m.reading_percentage != null}
 								<div class="flex items-center gap-2">
 									<div class="bg-surface-300 h-2 flex-1 overflow-hidden rounded-full">
@@ -381,8 +389,9 @@
 								<span class="text-surface-400 text-xs">—</span>
 							{/if}
 						</td>
-						<td>{formatDate(m.created_at)}</td>
-						<td class="flex gap-2" onclick={(e) => e.stopPropagation()}>
+						<td class="whitespace-nowrap">{formatDate(m.created_at)}</td>
+						<td onclick={(e) => e.stopPropagation()}>
+							<div class="flex gap-2">
 							<form
 								method="POST"
 								action="?/syncMapping"
@@ -426,6 +435,7 @@
 								<input type="hidden" name="id" value={m.id} />
 								<button type="submit" class="btn btn-sm preset-outlined-error-500">Remove</button>
 							</form>
+						</div>
 						</td>
 					</tr>
 				{:else}
