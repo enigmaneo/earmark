@@ -22,16 +22,16 @@
 	let pendingDelete = $state<ProgressItem | null>(null);
 	let deleteError = $state<string | null>(null);
 
-	const columns: { key: SortBy | null; label: string }[] = [
-		{ key: 'title', label: 'Title' },
-		{ key: null, label: 'Document' },
-		{ key: 'percentage', label: 'Percentage' },
-		{ key: 'progress', label: 'Progress' },
-		{ key: 'device', label: 'Device' },
-		{ key: 'is_latest', label: 'Latest' },
-		{ key: 'updated_at', label: 'Updated' },
-		{ key: null, label: 'ABS Sync' },
-		{ key: null, label: 'Actions' },
+	const columns: { key: SortBy | null; label: string; thClass: string }[] = [
+		{ key: 'title',      label: 'Title',      thClass: 'w-[40%] lg:w-[18%]' },
+		{ key: null,         label: 'Document',   thClass: 'hidden lg:table-cell lg:w-[16%]' },
+		{ key: 'percentage', label: 'Percentage', thClass: 'w-[12%] lg:w-[8%]' },
+		{ key: 'progress',   label: 'Progress',   thClass: 'hidden lg:table-cell lg:w-[13%]' },
+		{ key: 'device',     label: 'Device',     thClass: 'hidden lg:table-cell lg:w-[10%]' },
+		{ key: 'is_latest',  label: 'Latest',     thClass: 'hidden lg:table-cell lg:w-[6%]' },
+		{ key: 'updated_at', label: 'Updated',    thClass: 'w-[25%] lg:w-[13%]' },
+		{ key: null,         label: 'ABS Sync',   thClass: 'w-[10%] lg:w-[8%]' },
+		{ key: null,         label: 'Actions',    thClass: 'w-[13%] lg:w-[8%]' },
 	];
 
 	function navigate(overrides: Record<string, string>) {
@@ -110,22 +110,11 @@
 
 	<div class="table-wrap">
 		<table class="table table-hover" style="table-layout: fixed; width: 100%;">
-			<colgroup>
-				<col class="w-[18%]" /> <!-- Title -->
-				<col class="w-[16%]" /> <!-- Document -->
-				<col class="w-[8%]" />  <!-- Percentage -->
-				<col class="w-[13%]" /> <!-- Progress -->
-				<col class="w-[10%]" /> <!-- Device -->
-				<col class="w-[6%]" />  <!-- Latest -->
-				<col class="w-[13%]" /> <!-- Updated -->
-				<col class="w-[8%]" />  <!-- ABS Sync -->
-				<col class="w-[8%]" />  <!-- Actions -->
-			</colgroup>
 			<thead>
 				<tr>
 					{#each columns as col}
 						<th
-							class={col.key ? 'cursor-pointer select-none' : ''}
+							class="{col.thClass} {col.key ? 'cursor-pointer select-none' : ''}"
 							onclick={() => handleSort(col.key)}
 						>
 							<span class="inline-flex items-center gap-1">
@@ -142,11 +131,11 @@
 				{#each items as item (item.id)}
 					<tr>
 						<td class="max-w-xs truncate" title={item.title}>{item.title}</td>
-						<td class="max-w-xs truncate font-mono text-xs text-surface-500" title={item.document}>{item.document}</td>
+						<td class="hidden lg:table-cell max-w-xs truncate font-mono text-xs text-surface-500" title={item.document}>{item.document}</td>
 						<td>{formatPercent(item.percentage)}</td>
-						<td class="max-w-xs truncate font-mono text-xs" title={item.progress}>{item.progress}</td>
-						<td class="truncate" title={item.device}>{item.device}</td>
-						<td>{item.is_latest ? '✓' : ''}</td>
+						<td class="hidden lg:table-cell max-w-xs truncate font-mono text-xs" title={item.progress}>{item.progress}</td>
+						<td class="hidden lg:table-cell truncate" title={item.device}>{item.device}</td>
+						<td class="hidden lg:table-cell">{item.is_latest ? '✓' : ''}</td>
 						<td class="truncate">{formatDate(item.timestamp)}</td>
 						<td class="text-center">
 							{#if item.abs_synced === true}

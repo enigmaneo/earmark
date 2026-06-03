@@ -337,22 +337,14 @@
 
 	<div class="table-wrap">
 		<table class="table table-hover" style="table-layout: fixed; width: 100%;">
-			<colgroup>
-				<col class="w-[27%]" /> <!-- Audiobook -->
-				<col class="w-[18%]" /> <!-- Author -->
-				<col class="w-[9%]" />  <!-- Mapping -->
-				<col class="w-[13%]" /> <!-- Progress -->
-				<col class="w-[14%]" /> <!-- Created -->
-				<col class="w-[19%]" /> <!-- Actions -->
-			</colgroup>
 			<thead>
 				<tr>
-					<th>Audiobook</th>
-					<th>Author</th>
-					<th>Mapping</th>
-					<th>Progress</th>
-					<th>Created</th>
-					<th></th>
+					<th class="w-[50%] md:w-[27%]">Audiobook</th>
+					<th class="hidden md:table-cell md:w-[18%]">Author</th>
+					<th class="hidden md:table-cell md:w-[9%]">Mapping</th>
+					<th class="w-[25%] md:w-[13%]">Progress</th>
+					<th class="hidden md:table-cell md:w-[14%]">Created</th>
+					<th class="w-[25%] md:w-[19%]"></th>
 				</tr>
 			</thead>
 			<tbody>
@@ -362,8 +354,8 @@
 						onclick={() => handleRowClick(m)}
 					>
 						<td class="max-w-xs truncate" title={m.abs_title}>{m.abs_title}</td>
-						<td class="max-w-xs truncate" title={m.abs_author ?? '—'}>{m.abs_author ?? '—'}</td>
-						<td>
+						<td class="hidden md:table-cell max-w-xs truncate" title={m.abs_author ?? '—'}>{m.abs_author ?? '—'}</td>
+						<td class="hidden md:table-cell">
 							{#if ACTIVE_STATUSES.has(m.sync_status ?? '')}
 								<span class="text-xs tabular-nums">{m.sync_progress ?? 0}%</span>
 							{:else if m.sync_status === 'failed'}
@@ -389,7 +381,7 @@
 								<span class="text-surface-400 text-xs">—</span>
 							{/if}
 						</td>
-						<td class="whitespace-nowrap">{formatDate(m.created_at)}</td>
+						<td class="hidden md:table-cell whitespace-nowrap">{formatDate(m.created_at)}</td>
 						<td onclick={(e) => e.stopPropagation()}>
 							<div class="flex gap-2">
 							<form
