@@ -114,13 +114,14 @@
 				<tr>
 					{#each columns as col}
 						<th
-							class="{col.thClass} {col.key ? 'cursor-pointer select-none' : ''}"
+							class="{col.thClass} {col.key ? 'cursor-pointer select-none' : ''} overflow-hidden"
+							title={col.label}
 							onclick={() => handleSort(col.key)}
 						>
-							<span class="inline-flex items-center gap-1">
-								{col.label}
+							<span class="flex items-center gap-1 min-w-0">
+								<span class="truncate">{col.label}</span>
 								{#if col.key && sortBy === col.key}
-									<span>{sortDir === 'asc' ? '▲' : '▼'}</span>
+									<span class="shrink-0">{sortDir === 'asc' ? '▲' : '▼'}</span>
 								{/if}
 							</span>
 						</th>

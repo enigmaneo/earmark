@@ -339,11 +339,11 @@
 		<table class="table table-hover" style="table-layout: fixed; width: 100%;">
 			<thead>
 				<tr>
-					<th class="w-[50%] md:w-[27%]">Audiobook</th>
-					<th class="hidden md:table-cell md:w-[18%]">Author</th>
-					<th class="hidden md:table-cell md:w-[9%]">Mapping</th>
-					<th class="w-[25%] md:w-[13%]">Progress</th>
-					<th class="hidden md:table-cell md:w-[14%]">Created</th>
+					<th class="w-[50%] md:w-[27%] truncate" title="Audiobook">Audiobook</th>
+					<th class="hidden md:table-cell md:w-[18%] truncate" title="Author">Author</th>
+					<th class="hidden md:table-cell md:w-[9%] truncate" title="Mapping">Mapping</th>
+					<th class="w-[25%] md:w-[13%] truncate" title="Progress">Progress</th>
+					<th class="hidden md:table-cell md:w-[14%] truncate" title="Created">Created</th>
 					<th class="w-[25%] md:w-[19%]"></th>
 				</tr>
 			</thead>
