@@ -1,7 +1,9 @@
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from conftest import PROGRESS_PAYLOAD
+from earmark.models import AbsEbookMapping, User
 
 DOC = PROGRESS_PAYLOAD["document"]
 
@@ -54,6 +56,37 @@ async def test_put_progress_same_xpath_lower_percentage_is_noop(
     assert response.json()["progress"] == "/body/div[99]"
     list_response = await client.get(f"/syncs/progress?document={DOC}", headers=alice)
     assert list_response.json()["total"] == 1
+
+
+async def test_put_progress_with_duplicate_mapping_documents(
+    client: AsyncClient,
+    alice: dict[str, str],
+    db_session_factory: async_sessionmaker,  # type: ignore[type-arg]
+) -> None:
+    # The same ebook can be mapped more than once, so kosync_document is not unique.
+    # A push for a duplicated document must not crash on MultipleResultsFound.
+    async with db_session_factory() as session:
+        user = User(email="dup@example.com", password_hash="x")
+        session.add(user)
+        await session.flush()
+        for i in range(2):
+            session.add(
+                AbsEbookMapping(
+                    user_id=user.id,
+                    abs_item_id=f"item-{i}",
+                    abs_title=f"Book {i}",
+                    ebook_path=f"book{i}.epub",
+                    kosync_document=DOC,
+                )
+            )
+        await session.commit()
+
+    response = await client.put("/syncs/progress", json=PROGRESS_PAYLOAD, headers=alice)
+    assert response.status_code == 200
+
+    # The lowest-id mapping wins the title deterministically.
+    list_response = await client.get(f"/syncs/progress?document={DOC}", headers=alice)
+    assert list_response.json()["data"][0]["title"] == "Book 0"
 
 
 async def test_put_progress_with_metadata(client: AsyncClient, alice: dict[str, str]) -> None:

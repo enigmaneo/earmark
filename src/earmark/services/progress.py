@@ -6,11 +6,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from earmark.models import AbsEbookMapping, KosyncUser, ReadingProgress
 
 
-async def resolve_title_from_mapping(session: AsyncSession, document: str) -> str | None:
+async def get_mapping_for_document(
+    session: AsyncSession, document: str
+) -> AbsEbookMapping | None:
+    """Return one mapping for a kosync document hash.
+
+    kosync_document is not unique (the same ebook can be mapped more than once),
+    so pick the lowest-id match deterministically rather than assuming uniqueness.
+    """
     result = await session.execute(
-        select(AbsEbookMapping).where(AbsEbookMapping.kosync_document == document)
+        select(AbsEbookMapping)
+        .where(AbsEbookMapping.kosync_document == document)
+        .order_by(AbsEbookMapping.id)
+        .limit(1)
     )
-    mapping = result.scalar_one_or_none()
+    return result.scalars().first()
+
+
+async def resolve_title_from_mapping(session: AsyncSession, document: str) -> str | None:
+    mapping = await get_mapping_for_document(session, document)
     return mapping.abs_title if mapping is not None else None
 
 
@@ -86,10 +100,7 @@ async def write_reading_progress(
     if existing_latest is not None and existing_latest.progress == progress:
         return existing_latest
 
-    result = await session.execute(
-        select(AbsEbookMapping).where(AbsEbookMapping.kosync_document == document)
-    )
-    mapping = result.scalar_one_or_none()
+    mapping = await get_mapping_for_document(session, document)
     mapped_title = mapping.abs_title if mapping is not None else None
     resolved_title = mapped_title or title or document
 

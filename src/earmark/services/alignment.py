@@ -847,13 +847,17 @@ class AlignmentPipeline:
                 AbsEbookMapping.alignment_job_id == self.job.id
             )
         )
-        mapping = result.scalar_one_or_none()
-        if mapping is None or mapping.kosync_document:
+        # A job can back more than one mapping, so handle every one missing a hash.
+        mappings = [m for m in result.scalars().all() if not m.kosync_document]
+        if not mappings:
             return
 
-        mapping.kosync_document = await asyncio.to_thread(partial_md5, ebook_path)
+        doc = await asyncio.to_thread(partial_md5, ebook_path)
+        for mapping in mappings:
+            mapping.kosync_document = doc
         await self.session.commit()
-        await link_progress_to_mapping(self.session, mapping)
+        for mapping in mappings:
+            await link_progress_to_mapping(self.session, mapping)
         await self.session.commit()
 
     async def _download_ebook_from_abs(
