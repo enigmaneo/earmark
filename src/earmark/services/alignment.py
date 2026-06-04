@@ -14,9 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from earmark.config import settings
 from earmark.database import AsyncSessionLocal
-from earmark.models import AbsLibraryItem, AlignmentJob
+from earmark.models import AbsEbookMapping, AbsLibraryItem, AlignmentJob
 from earmark.services.audiobookshelf import AudiobookshelfClient
 from earmark.services.ebook_sources import CalibreOpdsSource, LocalEbookSource
+from earmark.services.progress import link_progress_to_mapping
+from earmark.utils import partial_md5
 
 logger = logging.getLogger(__name__)
 
@@ -665,6 +667,7 @@ class AlignmentPipeline:
 
             audio_dir = await self._download_audio_files(cache_dir, item_metadata)
             ebook_path = await self._download_ebook(cache_dir, item_metadata)
+            await self._ensure_kosync_document(ebook_path)
             _paragraphs, index, _first_body_pos, _last_body_pos = await self._parse_epub(ebook_path)
 
             audio_path = await self._prepare_audio(audio_dir)
@@ -831,6 +834,27 @@ class AlignmentPipeline:
 
         # Fallback: pull from the ABS item itself.
         await self._download_ebook_from_abs(dest, item_metadata)
+
+    async def _ensure_kosync_document(self, ebook_path: Path) -> None:
+        """Fill the mapping's KOReader partial-MD5 from the downloaded epub.
+
+        Calibre mappings can't compute this at creation time (no local file), so
+        we do it here once the epub is on disk, then link any pushed progress that
+        was waiting on a matching ``kosync_document``.
+        """
+        result = await self.session.execute(
+            select(AbsEbookMapping).where(
+                AbsEbookMapping.alignment_job_id == self.job.id
+            )
+        )
+        mapping = result.scalar_one_or_none()
+        if mapping is None or mapping.kosync_document:
+            return
+
+        mapping.kosync_document = await asyncio.to_thread(partial_md5, ebook_path)
+        await self.session.commit()
+        await link_progress_to_mapping(self.session, mapping)
+        await self.session.commit()
 
     async def _download_ebook_from_abs(
         self, dest: Path, item_metadata: dict  # type: ignore[type-arg]
