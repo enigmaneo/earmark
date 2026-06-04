@@ -12,6 +12,7 @@
 	} from '$lib/api';
 	import type { ActionData, PageData } from './$types';
 	import { toaster } from '$lib/toaster';
+	import { revealOnTap } from '$lib/revealOnTap';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -353,8 +354,8 @@
 						class="hover:bg-surface-200-800 transition-colors {m.kosync_document ? 'cursor-pointer' : ''}"
 						onclick={() => handleRowClick(m)}
 					>
-						<td class="max-w-xs truncate" title={m.abs_title}>{m.abs_title}</td>
-						<td class="hidden md:table-cell max-w-xs truncate" title={m.abs_author ?? '—'}>{m.abs_author ?? '—'}</td>
+						<td class="max-w-xs truncate" title={m.abs_title} use:revealOnTap={m.abs_title}>{m.abs_title}</td>
+						<td class="hidden md:table-cell max-w-xs truncate" title={m.abs_author ?? '—'} use:revealOnTap={m.abs_author ?? '—'}>{m.abs_author ?? '—'}</td>
 						<td class="hidden md:table-cell overflow-hidden">
 							{#if ACTIVE_STATUSES.has(m.sync_status ?? '')}
 								<span class="text-xs tabular-nums">{m.sync_progress ?? 0}%</span>

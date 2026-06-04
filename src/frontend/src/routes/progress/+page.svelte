@@ -5,6 +5,7 @@
 	import Modal from '$lib/Modal.svelte';
 	import type { PageData } from './$types';
 	import type { SortBy, SortDir, ProgressItem } from '$lib/api';
+	import { revealOnTap } from '$lib/revealOnTap';
 
 	let { data }: { data: PageData } = $props();
 
@@ -131,11 +132,11 @@
 			<tbody>
 				{#each items as item (item.id)}
 					<tr>
-						<td class="max-w-xs truncate" title={item.title}>{item.title}</td>
-						<td class="hidden lg:table-cell max-w-xs truncate font-mono text-xs text-surface-500" title={item.document}>{item.document}</td>
+						<td class="max-w-xs truncate" title={item.title} use:revealOnTap={item.title}>{item.title}</td>
+						<td class="hidden lg:table-cell max-w-xs truncate font-mono text-xs text-surface-500" title={item.document} use:revealOnTap={item.document}>{item.document}</td>
 						<td>{formatPercent(item.percentage)}</td>
-						<td class="hidden lg:table-cell max-w-xs truncate font-mono text-xs" title={item.progress}>{item.progress}</td>
-						<td class="hidden lg:table-cell truncate" title={item.device}>{item.device}</td>
+						<td class="hidden lg:table-cell max-w-xs truncate font-mono text-xs" title={item.progress} use:revealOnTap={item.progress}>{item.progress}</td>
+						<td class="hidden lg:table-cell truncate" title={item.device} use:revealOnTap={item.device}>{item.device}</td>
 						<td class="hidden lg:table-cell">{item.is_latest ? '✓' : ''}</td>
 						<td class="truncate">{formatDate(item.timestamp)}</td>
 						<td class="text-center">
