@@ -173,7 +173,7 @@
 	);
 </script>
 
-<div class="container mx-auto max-w-5xl space-y-8 p-6">
+<div class="container mx-auto max-w-7xl space-y-8 p-6">
 	<h1 class="h2">ABS–Ebook Mappings</h1>
 
 	{#if data.loadError}
@@ -341,10 +341,10 @@
 				<tr>
 					<th class="w-[50%] md:w-[27%] truncate" title="Audiobook">Audiobook</th>
 					<th class="hidden md:table-cell md:w-[18%] truncate" title="Author">Author</th>
-					<th class="hidden md:table-cell md:w-[9%] truncate" title="Mapping">Mapping</th>
+					<th class="hidden md:table-cell md:w-[12%] truncate" title="Mapping">Mapping</th>
 					<th class="w-[25%] md:w-[13%] truncate" title="Progress">Progress</th>
 					<th class="hidden md:table-cell md:w-[14%] truncate" title="Created">Created</th>
-					<th class="w-[25%] md:w-[19%]"></th>
+					<th class="w-[25%] md:w-[16%]"></th>
 				</tr>
 			</thead>
 			<tbody>
@@ -355,7 +355,7 @@
 					>
 						<td class="max-w-xs truncate" title={m.abs_title}>{m.abs_title}</td>
 						<td class="hidden md:table-cell max-w-xs truncate" title={m.abs_author ?? '—'}>{m.abs_author ?? '—'}</td>
-						<td class="hidden md:table-cell">
+						<td class="hidden md:table-cell overflow-hidden">
 							{#if ACTIVE_STATUSES.has(m.sync_status ?? '')}
 								<span class="text-xs tabular-nums">{m.sync_progress ?? 0}%</span>
 							{:else if m.sync_status === 'failed'}
@@ -368,7 +368,7 @@
 						</td>
 						<td>
 							{#if m.reading_percentage != null}
-								<div class="flex items-center gap-2">
+								<div class="flex min-w-0 items-center gap-2">
 									<div class="bg-surface-300 h-2 flex-1 overflow-hidden rounded-full">
 										<div
 											class="bg-primary-500 h-2 rounded-full transition-all duration-500"
