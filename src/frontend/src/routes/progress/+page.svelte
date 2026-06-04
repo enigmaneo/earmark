@@ -144,7 +144,8 @@
 							use:revealOnTap={{
 								text:
 									item.abs_synced === true
-										? 'Synced to ABS'
+										? 'Synced to ABS' +
+											(item.abs_synced_at ? '\n' + formatDate(item.abs_synced_at) : '')
 										: item.abs_synced === false
 											? (item.abs_sync_error ?? 'Sync failed')
 											: '',
@@ -152,7 +153,7 @@
 							}}
 						>
 							{#if item.abs_synced === true}
-								<span title="Synced to ABS" class="cursor-default inline-flex items-center justify-center w-5 h-5 rounded-full bg-green-600 text-white text-xs font-bold select-none">!</span>
+								<span title={'Synced to ABS' + (item.abs_synced_at ? '\n' + formatDate(item.abs_synced_at) : '')} class="cursor-default inline-flex items-center justify-center w-5 h-5 rounded-full bg-green-600 text-white text-xs font-bold select-none">!</span>
 							{:else if item.abs_synced === false}
 								<span title={item.abs_sync_error ?? 'Sync failed'} class="cursor-default inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-600 text-white text-xs font-bold select-none">!</span>
 							{/if}

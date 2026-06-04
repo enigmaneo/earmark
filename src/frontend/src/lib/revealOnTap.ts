@@ -25,7 +25,7 @@ function show(text: string, x: number, y: number) {
 	el.textContent = text;
 	el.className =
 		'bg-surface-100-900 border-surface-300-700 pointer-events-none fixed z-50 max-w-64 ' +
-		'rounded-lg border px-3 py-2 text-sm break-words shadow-xl';
+		'rounded-lg border px-3 py-2 text-sm break-words whitespace-pre-line shadow-xl';
 	document.body.appendChild(el);
 
 	// Measure, then clamp into the viewport (flip above the tap if it would spill off-screen).
