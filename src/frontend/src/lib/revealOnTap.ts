@@ -68,22 +68,37 @@ function show(text: string, x: number, y: number) {
 	};
 }
 
-export function revealOnTap(node: HTMLElement, text: string | null | undefined) {
-	let current = text;
+type RevealArg =
+	| string
+	| null
+	| undefined
+	| { text: string | null | undefined; always?: boolean };
+
+function normalize(arg: RevealArg): { text: string | null | undefined; always: boolean } {
+	if (arg && typeof arg === 'object') return { text: arg.text, always: arg.always ?? false };
+	return { text: arg, always: false };
+}
+
+/**
+ * @param arg The full text to reveal. Pass `{ text, always: true }` to force-show even
+ *   when the element isn't truncated (e.g. an icon badge whose info is always hidden).
+ */
+export function revealOnTap(node: HTMLElement, arg: RevealArg) {
+	let opts = normalize(arg);
 
 	function onClick(e: MouseEvent) {
-		if (!current) return;
+		if (!opts.text) return;
 		if (!window.matchMedia('(pointer: coarse)').matches) return;
-		if (node.scrollWidth <= node.clientWidth) return;
+		if (!opts.always && node.scrollWidth <= node.clientWidth) return;
 		e.stopPropagation();
-		show(current, e.clientX, e.clientY);
+		show(opts.text, e.clientX, e.clientY);
 	}
 
 	node.addEventListener('click', onClick);
 
 	return {
-		update(text: string | null | undefined) {
-			current = text;
+		update(arg: RevealArg) {
+			opts = normalize(arg);
 		},
 		destroy() {
 			node.removeEventListener('click', onClick);
