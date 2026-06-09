@@ -196,8 +196,8 @@ def _parse_opds_feed(
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(xml_text, "xml")
-    # (tier, format_priority, EbookCandidate)
-    ranked: list[tuple[int, int, EbookCandidate]] = []
+    # (tier, author_rank, format_priority, EbookCandidate)
+    ranked: list[tuple[int, int, int, EbookCandidate]] = []
 
     for entry in soup.find_all("entry"):
         entry_title_tag = entry.find("title")
@@ -213,8 +213,10 @@ def _parse_opds_feed(
             for name in [author.find("name")]
             if name is not None
         ]
-        if not _author_matches(norm_author, opds_authors):
-            continue
+        # Author is a ranking signal, not a filter: ABS metadata sometimes stores
+        # the series name (e.g. "The Wheel of Time") instead of the author, so a
+        # title match with a mismatched author still surfaces, just ranked lower.
+        author_rank = 0 if _author_matches(norm_author, opds_authors) else 1
 
         author_display = ", ".join(a for a in opds_authors if a) or None
 
@@ -232,7 +234,7 @@ def _parse_opds_feed(
                 author=author_display,
                 format=fmt,
             )
-            ranked.append((tier, _FORMAT_PRIORITY.get(fmt, 99), candidate))
+            ranked.append((tier, author_rank, _FORMAT_PRIORITY.get(fmt, 99), candidate))
 
-    ranked.sort(key=lambda x: (x[0], x[1]))
-    return [c for _t, _p, c in ranked]
+    ranked.sort(key=lambda x: (x[0], x[1], x[2]))
+    return [c for *_rest, c in ranked]
