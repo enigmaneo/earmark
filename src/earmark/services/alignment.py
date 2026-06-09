@@ -309,7 +309,13 @@ def _ffmpeg_concat_sync(audio_files: list[Path], output_path: Path) -> None:
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         concat_list = Path(f.name)
         for p in audio_files:
-            f.write(f"file '{p.absolute()}'\n")
+            # The concat demuxer quotes each path in single quotes; a literal
+            # apostrophe in a filename (e.g. "Blacksmith's Puzzle.mp3") would
+            # otherwise terminate the quote early, making ffmpeg skip that file
+            # and every file after it — silently truncating the track while
+            # still exiting 0. Escape ' as '\'' per the concat-list syntax.
+            escaped = str(p.absolute()).replace("'", "'\\''")
+            f.write(f"file '{escaped}'\n")
 
     try:
         (
@@ -320,6 +326,19 @@ def _ffmpeg_concat_sync(audio_files: list[Path], output_path: Path) -> None:
         )
     finally:
         concat_list.unlink(missing_ok=True)
+
+    # Guard against silent truncation: the concat demuxer can drop trailing
+    # files (e.g. an unreadable path) and still exit 0. Verify the output
+    # length matches the sum of the inputs before we spend ~30 min
+    # transcribing a track that's missing most of the book.
+    expected = sum(float(ffmpeg.probe(str(p))["format"]["duration"]) for p in audio_files)
+    actual = float(ffmpeg.probe(str(output_path))["format"]["duration"])
+    if actual < expected - 5.0:
+        raise RuntimeError(
+            f"Audio concatenation truncated: expected ~{expected:.0f}s from "
+            f"{len(audio_files)} files but got {actual:.0f}s. "
+            "A source file may be unreadable or its path malformed."
+        )
 
 
 async def _run_transcribe_worker(
@@ -541,6 +560,57 @@ def _word_index_at_char(ranges: list[tuple[int, int, float, float]], char_pos: i
     return min(lo, max(0, len(ranges) - 1))
 
 
+def _char_at_time(
+    ranges: list[tuple[int, int, float, float]],
+    time_starts: list[float],
+    t: float,
+) -> int:
+    """Char offset of the first transcript word at/after audio time ``t``."""
+    import bisect
+
+    j = bisect.bisect_right(time_starts, t) - 1
+    j = max(0, min(j, len(ranges) - 1))
+    return ranges[j][0]
+
+
+def _match_in_window(
+    p_norm: str,
+    transcript: str,
+    ranges: list[tuple[int, int, float, float]],
+    expected_char: int,
+    min_score: float,
+) -> tuple[float, float] | None:
+    """Fuzzy-match one normalized paragraph in a window around ``expected_char``.
+
+    Returns the matched (audio_start, audio_end) or None when no span scores
+    above ``min_score``. The window half-width covers roughly a chapter so a
+    slightly-off expected position still finds the paragraph.
+    """
+    from rapidfuzz import fuzz
+
+    total = len(transcript)
+    half = max(8_000, len(p_norm) * 5)
+    win_start = max(0, expected_char - half)
+    win_end = min(total, expected_char + half)
+    if win_start >= total:
+        return None
+
+    window = transcript[win_start:win_end]
+    match = fuzz.partial_ratio_alignment(p_norm, window)
+    if match.score < min_score:
+        return None
+
+    m_start = win_start + match.dest_start
+    m_end = win_start + match.dest_end
+    start_idx = _word_index_at_char(ranges, m_start)
+    end_idx = max(_word_index_at_char(ranges, max(m_end - 1, m_start)), start_idx)
+    t_start = ranges[start_idx][2]
+    t_end = ranges[end_idx][3]
+    if t_end < t_start:
+        t_end = t_start
+    return t_start, t_end
+
+
 def _align_paragraphs_to_transcript(
     paragraphs: list[str],
     transcript: str,
@@ -554,13 +624,11 @@ def _align_paragraphs_to_transcript(
     transcript). The window is wide enough to absorb non-uniform ratios of
     EPUB paragraphs to spoken words across chapters.
 
-    Returns None for paragraphs that don't fuzzy-match (front/back matter not
-    narrated, ad inserts, etc.). Proportional positioning naturally produces
-    monotonically-increasing timestamps on average; small local regressions
-    can occur at chapter boundaries but are acceptable for sync.
+    Used as the fallback when no EPUB heading maps to an ABS chapter (see
+    ``_align_paragraphs_anchored`` for the anchored path). Returns None for
+    paragraphs that don't fuzzy-match (front/back matter not narrated, ad
+    inserts, etc.).
     """
-    from rapidfuzz import fuzz
-
     n = len(paragraphs)
     total = len(transcript)
     if total == 0 or not ranges:
@@ -573,33 +641,77 @@ def _align_paragraphs_to_transcript(
             results.append(None)
             continue
         expected = int(total * (i / n))
-        # Window centered on expected position. Wide enough to cover the
-        # entire chapter the paragraph likely belongs to.
-        half = max(8_000, len(p_norm) * 5)
-        win_start = max(0, expected - half)
-        win_end = min(total, expected + half)
-        if win_start >= total:
+        results.append(_match_in_window(p_norm, transcript, ranges, expected, min_score))
+
+    return results
+
+
+def _align_paragraphs_anchored(
+    paragraphs: list[str],
+    transcript: str,
+    ranges: list[tuple[int, int, float, float]],
+    anchors: list[tuple[int, float]],
+    min_score: float = 45.0,
+) -> list[tuple[float, float] | None]:
+    """Position each paragraph's search window using ABS chapter anchors.
+
+    ``anchors`` is a list of ``(paragraph_index, audio_time)`` pairs, strictly
+    increasing in both fields, derived from EPUB chapter headings matched to
+    ground-truth ABS chapter starts. A paragraph's expected audio time is the
+    linear interpolation between its bracketing anchors (in paragraph-index
+    space), which keeps the search inside the right chapter instead of relying
+    on a single global proportional estimate — the latter drifts by tens of
+    minutes on books with dense front matter or an unusually long prologue.
+
+    A match is rejected (left None for the interpolation pass to fill) when it
+    lands outside the bracketing chapter span, so a repeated phrase can't drag
+    a paragraph into a neighbouring chapter. Heading paragraphs that are anchors
+    are always emitted so the chapter-snap step can pin them to the exact ABS
+    start, even when the audio timeline diverges from ABS.
+    """
+    import bisect
+
+    n = len(paragraphs)
+    total = len(transcript)
+    if total == 0 or not ranges or not anchors:
+        return [None] * n
+
+    time_starts = [r[2] for r in ranges]
+    audio_end = ranges[-1][3]
+    a_idx = [a[0] for a in anchors]
+    a_time = [a[1] for a in anchors]
+    anchor_time_by_idx = dict(anchors)
+
+    results: list[tuple[float, float] | None] = []
+    for i, p in enumerate(paragraphs):
+        p_norm = _normalize_text(p)
+        if not p_norm:
             results.append(None)
             continue
 
-        window = transcript[win_start:win_end]
-        match = fuzz.partial_ratio_alignment(p_norm, window)
-        if match.score < min_score:
-            results.append(None)
+        # An anchor heading must always land in the sync map so the snap step
+        # can pin it; its fuzzy position is irrelevant (the snap overwrites it).
+        if i in anchor_time_by_idx:
+            results.append((anchor_time_by_idx[i], anchor_time_by_idx[i]))
             continue
 
-        m_start = win_start + match.dest_start
-        m_end = win_start + match.dest_end
+        # Find the bracketing anchors and the allowed [lo_t, hi_t] audio span.
+        if i < a_idx[0]:
+            p0, t0, p1, t1 = 0, 0.0, a_idx[0], a_time[0]
+        elif i >= a_idx[-1]:
+            p0, t0, p1, t1 = a_idx[-1], a_time[-1], n - 1, audio_end
+        else:
+            k = bisect.bisect_right(a_idx, i) - 1
+            p0, t0, p1, t1 = a_idx[k], a_time[k], a_idx[k + 1], a_time[k + 1]
+        lo_t, hi_t = t0, t1
+        et = t0 + (t1 - t0) * ((i - p0) / (p1 - p0)) if p1 > p0 else t0
+        expected_char = _char_at_time(ranges, time_starts, et)
 
-        start_idx = _word_index_at_char(ranges, m_start)
-        end_idx = _word_index_at_char(ranges, max(m_end - 1, m_start))
-        end_idx = max(end_idx, start_idx)
-
-        t_start = ranges[start_idx][2]
-        t_end = ranges[end_idx][3]
-        if t_end < t_start:
-            t_end = t_start
-        results.append((t_start, t_end))
+        res = _match_in_window(p_norm, transcript, ranges, expected_char, min_score)
+        if res is None or res[0] < lo_t - 30.0 or res[0] > hi_t + 30.0:
+            results.append(None)
+            continue
+        results.append(res)
 
     return results
 
@@ -1029,9 +1141,40 @@ class AlignmentPipeline:
         paragraphs = [index[pid]["text"] for pid in para_ids]
 
         transcript, ranges = await asyncio.to_thread(_build_transcript_index, words)
-        alignments = await asyncio.to_thread(
-            _align_paragraphs_to_transcript, paragraphs, transcript, ranges
-        )
+
+        # Derive chapter anchors: EPUB headings (Prologue / Chapter N /
+        # Epilogue) matched by text to a ground-truth ABS chapter start. These
+        # let us position each paragraph's search window inside its own chapter
+        # rather than against a single global proportional estimate, which
+        # drifts badly on books with heavy front matter or a long prologue.
+        # Kept strictly increasing in both paragraph index and time.
+        chapter_anchors: list[tuple[int, float]] = []
+        if chapters:
+            for i, pid in enumerate(para_ids):
+                entry = index[pid]
+                if not _EPUB_HEADING_RE.search(entry["ebook_pos"]):
+                    continue
+                m = _CHAPTER_HEADING_RE.match(entry["text"])
+                if not m:
+                    continue
+                abs_idx = _match_heading_to_abs_chapter(m.group(1), chapters)
+                if abs_idx is None:
+                    continue
+                t = float(chapters[abs_idx]["start"])
+                if not chapter_anchors or (
+                    i > chapter_anchors[-1][0] and t > chapter_anchors[-1][1]
+                ):
+                    chapter_anchors.append((i, t))
+
+        if chapter_anchors:
+            alignments = await asyncio.to_thread(
+                _align_paragraphs_anchored,
+                paragraphs, transcript, ranges, chapter_anchors,
+            )
+        else:
+            alignments = await asyncio.to_thread(
+                _align_paragraphs_to_transcript, paragraphs, transcript, ranges
+            )
 
         unmatched = sum(1 for a in alignments if a is None)
         if unmatched:
