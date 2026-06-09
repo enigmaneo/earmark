@@ -171,13 +171,43 @@ async def test_calibre_source_no_matches() -> None:
 
 
 @pytest.mark.asyncio
-async def test_calibre_source_filters_author_mismatch() -> None:
+async def test_calibre_source_author_mismatch_still_returned() -> None:
+    """Author is a ranking signal, not a filter: a title match surfaces even when
+    the author differs (ABS sometimes stores the series name as the author)."""
     src = CalibreOpdsSource(
         base_url="http://calibre.test",
         transport=_opds_transport(OPDS_XML_AUTHOR_MISMATCH),
     )
     results = await src.search("The Test Book", "Test Author")
-    assert results == []
+    assert len(results) == 1
+    assert results[0].ref == "/opds/download/9/test.epub"
+
+
+@pytest.mark.asyncio
+async def test_calibre_source_author_match_ranks_first() -> None:
+    """Among equal title matches, the correct-author entry sorts ahead of a mismatch."""
+    feed = f"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <title>The Test Book</title>
+    <author><name>J.K. Rowling</name></author>
+    <link {_ACQ} type="application/epub+zip" href="/opds/download/wrong.epub"/>
+  </entry>
+  <entry>
+    <title>The Test Book</title>
+    <author><name>Test Author</name></author>
+    <link {_ACQ} type="application/epub+zip" href="/opds/download/right.epub"/>
+  </entry>
+</feed>
+"""
+    src = CalibreOpdsSource(
+        base_url="http://calibre.test", transport=_opds_transport(feed)
+    )
+    results = await src.search("The Test Book", "Test Author")
+    assert [r.ref for r in results] == [
+        "/opds/download/right.epub",
+        "/opds/download/wrong.epub",
+    ]
 
 
 @pytest.mark.asyncio
@@ -333,6 +363,64 @@ async def test_calibre_source_token_match_requires_all_tokens() -> None:
     # ABS title that should NOT match (missing the "of twilight" half).
     results = await src.search("Apocalypse", "Robert Jordan")
     assert results == []
+
+
+@pytest.mark.asyncio
+async def test_calibre_source_word_volume_prefix_builds_query() -> None:
+    """ABS title 'Book Ten: Crossroads of Twilight' should send 'crossroads', not 'book'."""
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        return httpx.Response(200, text=OPDS_XML_NO_MATCHES)
+
+    src = CalibreOpdsSource(
+        base_url="http://calibre.test",
+        transport=httpx.MockTransport(handler),
+    )
+    await src.search("Book Ten: Crossroads of Twilight", "Robert Jordan")
+    assert captured["path"] == "/opds/search/crossroads"
+
+
+@pytest.mark.asyncio
+async def test_calibre_source_word_volume_prefix_matches() -> None:
+    """Real-world regression: ABS title 'Book Ten: Crossroads of Twilight' with the
+    series name stored as author ('The Wheel of Time') still finds the WoT entry whose
+    real author is 'Robert Jordan'."""
+    feed = f"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <title>Wheel of Time [10]: Crossroads of Twilight</title>
+    <author><name>Robert Jordan</name></author>
+    <link {_ACQ} type="application/epub+zip" href="/opds/download/10/cot.epub"/>
+  </entry>
+</feed>
+"""
+    src = CalibreOpdsSource(
+        base_url="http://calibre.test", transport=_opds_transport(feed)
+    )
+    results = await src.search(
+        "Book Ten: Crossroads of Twilight", "The Wheel of Time"
+    )
+    assert len(results) == 1
+    assert results[0].ref == "/opds/download/10/cot.epub"
+
+
+@pytest.mark.asyncio
+async def test_calibre_source_volume_prefix_does_not_mangle_plain_title() -> None:
+    """'Book of the Dead' has no volume separator, so the prefix must not be stripped."""
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        return httpx.Response(200, text=OPDS_XML_NO_MATCHES)
+
+    src = CalibreOpdsSource(
+        base_url="http://calibre.test",
+        transport=httpx.MockTransport(handler),
+    )
+    await src.search("Book of the Dead", "Some Author")
+    assert captured["path"] == "/opds/search/book"
 
 
 # ── Route integration ─────────────────────────────────────────────────────────
