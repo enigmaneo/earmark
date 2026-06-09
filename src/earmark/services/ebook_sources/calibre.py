@@ -19,6 +19,12 @@ _LEADING_INDEX_RE = re.compile(
     r"^(?:book\s+)?\d+[\W_]+", re.IGNORECASE
 )
 
+# Leading volume markers on ABS titles incl. word-form numbers,
+# e.g. "Book Ten: ", "Volume III - ", "Part 2. ". Conservative: one token then a separator.
+_LEADING_VOLUME_RE = re.compile(
+    r"^(?:book|volume|vol|part)\s+[\w'-]+\s*[:.\-]+\s*", re.IGNORECASE
+)
+
 _MIME_TO_FORMAT: dict[str, str] = {
     "application/epub+zip": "epub",
     "application/x-mobipocket-ebook": "mobi",
@@ -65,8 +71,9 @@ class CalibreOpdsSource:
         if not self._base_url:
             raise RuntimeError("Calibre Web URL is not configured (CWA_URL).")
 
-        query = _build_search_query(title)
-        norm_title = normalize(title)
+        core_title = _LEADING_VOLUME_RE.sub("", _LEADING_INDEX_RE.sub("", title)).strip()
+        query = _build_search_query(core_title)
+        norm_title = normalize(core_title)
         norm_author = normalize(author or "")
         if not query or not norm_title:
             return []

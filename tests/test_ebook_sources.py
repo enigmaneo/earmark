@@ -335,6 +335,60 @@ async def test_calibre_source_token_match_requires_all_tokens() -> None:
     assert results == []
 
 
+@pytest.mark.asyncio
+async def test_calibre_source_word_volume_prefix_builds_query() -> None:
+    """ABS title 'Book Ten: Crossroads of Twilight' should send 'crossroads', not 'book'."""
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        return httpx.Response(200, text=OPDS_XML_NO_MATCHES)
+
+    src = CalibreOpdsSource(
+        base_url="http://calibre.test",
+        transport=httpx.MockTransport(handler),
+    )
+    await src.search("Book Ten: Crossroads of Twilight", "Robert Jordan")
+    assert captured["path"] == "/opds/search/crossroads"
+
+
+@pytest.mark.asyncio
+async def test_calibre_source_word_volume_prefix_matches() -> None:
+    """ABS 'Book Ten: Crossroads of Twilight' finds the WoT series-prefixed entry."""
+    feed = f"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <title>Wheel of Time [10]: Crossroads of Twilight</title>
+    <author><name>Robert Jordan</name></author>
+    <link {_ACQ} type="application/epub+zip" href="/opds/download/10/cot.epub"/>
+  </entry>
+</feed>
+"""
+    src = CalibreOpdsSource(
+        base_url="http://calibre.test", transport=_opds_transport(feed)
+    )
+    results = await src.search("Book Ten: Crossroads of Twilight", "Robert Jordan")
+    assert len(results) == 1
+    assert results[0].ref == "/opds/download/10/cot.epub"
+
+
+@pytest.mark.asyncio
+async def test_calibre_source_volume_prefix_does_not_mangle_plain_title() -> None:
+    """'Book of the Dead' has no volume separator, so the prefix must not be stripped."""
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        return httpx.Response(200, text=OPDS_XML_NO_MATCHES)
+
+    src = CalibreOpdsSource(
+        base_url="http://calibre.test",
+        transport=httpx.MockTransport(handler),
+    )
+    await src.search("Book of the Dead", "Some Author")
+    assert captured["path"] == "/opds/search/book"
+
+
 # ── Route integration ─────────────────────────────────────────────────────────
 
 
