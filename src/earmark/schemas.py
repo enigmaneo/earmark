@@ -74,6 +74,7 @@ class ProgressListItem(ProgressResponse):
     authors: str | None = None
     is_latest: bool | None = None
     abs_synced: bool | None = None
+    abs_synced_at: int | None = None
     abs_sync_error: str | None = None
 
 

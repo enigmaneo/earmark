@@ -48,6 +48,9 @@ def _to_list_item(r: ReadingProgress) -> ProgressListItem:
         authors=r.authors,
         is_latest=r.is_latest,
         abs_synced=r.abs_synced,
+        abs_synced_at=(
+            int(r.abs_synced_at.replace(tzinfo=UTC).timestamp()) if r.abs_synced_at else None
+        ),
         abs_sync_error=r.abs_sync_error,
     )
 

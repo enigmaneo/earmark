@@ -3,7 +3,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from earmark.database import AsyncSessionLocal, Base, engine, init_db
 from earmark.earmark_auth import hash_password
@@ -453,6 +453,8 @@ PROGRESS: list[dict] = [
 async def seed() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+        # Also clear Alembic's bookkeeping so init_db re-runs migrations from scratch.
+        await conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
     await init_db()
 
     async with AsyncSessionLocal() as session:

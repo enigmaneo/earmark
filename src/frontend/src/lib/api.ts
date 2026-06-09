@@ -19,6 +19,7 @@ export interface ProgressItem {
 	authors: string | null;
 	is_latest: boolean | null;
 	abs_synced: boolean | null;
+	abs_synced_at: number | null;
 	abs_sync_error: string | null;
 }
 

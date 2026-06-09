@@ -61,6 +61,7 @@ class ReadingProgress(Base):
     is_latest: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     abs_synced: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    abs_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     abs_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     kosync_user: Mapped["KosyncUser"] = relationship(back_populates="progress")

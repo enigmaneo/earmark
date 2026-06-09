@@ -5,6 +5,7 @@
 	import Modal from '$lib/Modal.svelte';
 	import type { PageData } from './$types';
 	import type { SortBy, SortDir, ProgressItem } from '$lib/api';
+	import { revealOnTap } from '$lib/revealOnTap';
 
 	let { data }: { data: PageData } = $props();
 
@@ -22,16 +23,16 @@
 	let pendingDelete = $state<ProgressItem | null>(null);
 	let deleteError = $state<string | null>(null);
 
-	const columns: { key: SortBy | null; label: string }[] = [
-		{ key: 'title', label: 'Title' },
-		{ key: null, label: 'Document' },
-		{ key: 'percentage', label: 'Percentage' },
-		{ key: 'progress', label: 'Progress' },
-		{ key: 'device', label: 'Device' },
-		{ key: 'is_latest', label: 'Latest' },
-		{ key: 'updated_at', label: 'Updated' },
-		{ key: null, label: 'ABS Sync' },
-		{ key: null, label: 'Actions' },
+	const columns: { key: SortBy | null; label: string; thClass: string }[] = [
+		{ key: 'title',      label: 'Title',      thClass: 'w-[40%] lg:w-[18%]' },
+		{ key: null,         label: 'Document',   thClass: 'hidden lg:table-cell lg:w-[16%]' },
+		{ key: 'percentage', label: 'Percentage', thClass: 'w-[12%] lg:w-[8%]' },
+		{ key: 'progress',   label: 'Progress',   thClass: 'hidden lg:table-cell lg:w-[13%]' },
+		{ key: 'device',     label: 'Device',     thClass: 'hidden lg:table-cell lg:w-[10%]' },
+		{ key: 'is_latest',  label: 'Latest',     thClass: 'hidden lg:table-cell lg:w-[6%]' },
+		{ key: 'updated_at', label: 'Updated',    thClass: 'w-[25%] lg:w-[13%]' },
+		{ key: null,         label: 'ABS Sync',   thClass: 'w-[10%] lg:w-[8%]' },
+		{ key: null,         label: 'Actions',    thClass: 'w-[13%] lg:w-[8%]' },
 	];
 
 	function navigate(overrides: Record<string, string>) {
@@ -109,18 +110,19 @@
 	</div>
 
 	<div class="table-wrap">
-		<table class="table table-hover">
+		<table class="table table-hover" style="table-layout: fixed; width: 100%;">
 			<thead>
 				<tr>
 					{#each columns as col}
 						<th
-							class={col.key ? 'cursor-pointer select-none' : ''}
+							class="{col.thClass} {col.key ? 'cursor-pointer select-none' : ''} overflow-hidden"
+							title={col.label}
 							onclick={() => handleSort(col.key)}
 						>
-							<span class="inline-flex items-center gap-1">
-								{col.label}
+							<span class="flex items-center gap-1 min-w-0">
+								<span class="truncate">{col.label}</span>
 								{#if col.key && sortBy === col.key}
-									<span>{sortDir === 'asc' ? '▲' : '▼'}</span>
+									<span class="shrink-0">{sortDir === 'asc' ? '▲' : '▼'}</span>
 								{/if}
 							</span>
 						</th>
@@ -130,16 +132,28 @@
 			<tbody>
 				{#each items as item (item.id)}
 					<tr>
-						<td class="max-w-xs truncate" title={item.title}>{item.title}</td>
-						<td class="max-w-xs truncate font-mono text-xs text-surface-500" title={item.document}>{item.document}</td>
+						<td class="max-w-xs truncate" title={item.title} use:revealOnTap={item.title}>{item.title}</td>
+						<td class="hidden lg:table-cell max-w-xs truncate font-mono text-xs text-surface-500" title={item.document} use:revealOnTap={item.document}>{item.document}</td>
 						<td>{formatPercent(item.percentage)}</td>
-						<td class="max-w-xs truncate font-mono text-xs" title={item.progress}>{item.progress}</td>
-						<td>{item.device}</td>
-						<td>{item.is_latest ? '✓' : ''}</td>
-						<td>{formatDate(item.timestamp)}</td>
-						<td class="text-center">
+						<td class="hidden lg:table-cell max-w-xs truncate font-mono text-xs" title={item.progress} use:revealOnTap={item.progress}>{item.progress}</td>
+						<td class="hidden lg:table-cell truncate" title={item.device} use:revealOnTap={item.device}>{item.device}</td>
+						<td class="hidden lg:table-cell">{item.is_latest ? '✓' : ''}</td>
+						<td class="truncate" title={formatDate(item.timestamp)} use:revealOnTap={formatDate(item.timestamp)}>{formatDate(item.timestamp)}</td>
+						<td
+							class="text-center"
+							use:revealOnTap={{
+								text:
+									item.abs_synced === true
+										? 'Synced to ABS' +
+											(item.abs_synced_at ? '\n' + formatDate(item.abs_synced_at) : '')
+										: item.abs_synced === false
+											? (item.abs_sync_error ?? 'Sync failed')
+											: '',
+								always: true,
+							}}
+						>
 							{#if item.abs_synced === true}
-								<span title="Synced to ABS" class="cursor-default inline-flex items-center justify-center w-5 h-5 rounded-full bg-green-600 text-white text-xs font-bold select-none">!</span>
+								<span title={'Synced to ABS' + (item.abs_synced_at ? '\n' + formatDate(item.abs_synced_at) : '')} class="cursor-default inline-flex items-center justify-center w-5 h-5 rounded-full bg-green-600 text-white text-xs font-bold select-none">!</span>
 							{:else if item.abs_synced === false}
 								<span title={item.abs_sync_error ?? 'Sync failed'} class="cursor-default inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-600 text-white text-xs font-bold select-none">!</span>
 							{/if}

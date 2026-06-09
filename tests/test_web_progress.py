@@ -128,8 +128,8 @@ async def test_web_progress_filter_by_document(
 async def test_web_progress_sort_ascending(
     client: AsyncClient, alice_jwt: str, alice_kosync: dict[str, str]
 ) -> None:
-    await client.put("/syncs/progress", json={**PROGRESS_PAYLOAD, "percentage": 0.1}, headers=alice_kosync)
-    await client.put("/syncs/progress", json={**PROGRESS_PAYLOAD, "percentage": 0.9}, headers=alice_kosync)
+    await client.put("/syncs/progress", json={**PROGRESS_PAYLOAD, "percentage": 0.1, "progress": "/body/DocFragment[1]/body/p[1]"}, headers=alice_kosync)
+    await client.put("/syncs/progress", json={**PROGRESS_PAYLOAD, "percentage": 0.9, "progress": "/body/DocFragment[2]/body/p[1]"}, headers=alice_kosync)
     res = await client.get(
         "/web/progress?sort_by=percentage&sort_dir=asc",
         headers={"Authorization": f"Bearer {alice_jwt}"},

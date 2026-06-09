@@ -3,14 +3,28 @@ from datetime import UTC, datetime
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from earmark.models import AbsEbookMapping, ReadingProgress
+from earmark.models import AbsEbookMapping, KosyncUser, ReadingProgress
+
+
+async def get_mapping_for_document(
+    session: AsyncSession, document: str
+) -> AbsEbookMapping | None:
+    """Return one mapping for a kosync document hash.
+
+    kosync_document is not unique (the same ebook can be mapped more than once),
+    so pick the lowest-id match deterministically rather than assuming uniqueness.
+    """
+    result = await session.execute(
+        select(AbsEbookMapping)
+        .where(AbsEbookMapping.kosync_document == document)
+        .order_by(AbsEbookMapping.id)
+        .limit(1)
+    )
+    return result.scalars().first()
 
 
 async def resolve_title_from_mapping(session: AsyncSession, document: str) -> str | None:
-    result = await session.execute(
-        select(AbsEbookMapping).where(AbsEbookMapping.kosync_document == document)
-    )
-    mapping = result.scalar_one_or_none()
+    mapping = await get_mapping_for_document(session, document)
     return mapping.abs_title if mapping is not None else None
 
 
@@ -25,6 +39,38 @@ async def backfill_progress_titles(
         )
         .values(title=title)
     )
+
+
+async def link_progress_to_mapping(
+    session: AsyncSession, mapping: AbsEbookMapping
+) -> None:
+    """Associate existing reading progress with a newly-hashed mapping.
+
+    For every KosyncUser that has progress under ``mapping.kosync_document``, claim
+    it for the mapping owner (if not already owned) and relabel that progress with
+    the mapping title. Mirrors the linking rule in ``write_reading_progress``.
+    """
+    if not mapping.kosync_document:
+        return
+
+    result = await session.execute(
+        select(ReadingProgress.kosync_user_id)
+        .where(ReadingProgress.document == mapping.kosync_document)
+        .distinct()
+    )
+    kosync_user_ids = list(result.scalars().all())
+
+    for kosync_user_id in kosync_user_ids:
+        kosync_user = await session.get(KosyncUser, kosync_user_id)
+        if kosync_user is not None and kosync_user.user_id is None:
+            kosync_user.user_id = mapping.user_id
+            session.add(kosync_user)
+        await backfill_progress_titles(
+            session,
+            kosync_user_id=kosync_user_id,
+            document=mapping.kosync_document,
+            title=mapping.abs_title,
+        )
 
 
 async def write_reading_progress(
@@ -51,22 +97,14 @@ async def write_reading_progress(
         )
     ).scalar_one_or_none()
 
-    if (
-        existing_latest is not None
-        and existing_latest.progress == progress
-        and existing_latest.percentage == percentage
-    ):
+    if existing_latest is not None and existing_latest.progress == progress:
         return existing_latest
 
-    result = await session.execute(
-        select(AbsEbookMapping).where(AbsEbookMapping.kosync_document == document)
-    )
-    mapping = result.scalar_one_or_none()
+    mapping = await get_mapping_for_document(session, document)
     mapped_title = mapping.abs_title if mapping is not None else None
     resolved_title = mapped_title or title or document
 
     if mapping is not None:
-        from earmark.models import KosyncUser
         kosync_user = await session.get(KosyncUser, kosync_user_id)
         if kosync_user is not None and kosync_user.user_id is None:
             kosync_user.user_id = mapping.user_id
