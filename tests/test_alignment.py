@@ -600,6 +600,20 @@ def test_classify_linear_no_is_front() -> None:
                      attrs={"linear": "no"}) == "front"
 
 
+def test_classify_drop_cap_title_page_is_front() -> None:
+    # Drop-cap markup (<span>C</span>ROSSROADS…) must not gain an injected
+    # space in the heading text — "c rossroads…" classifies as body via the
+    # Roman-numeral alternative in _BODY_HEADING_RE matching the lone "c".
+    html = (
+        "<html><body>"
+        "<h1><span>C</span>ROSSROADS OF <span>T</span>WILIGHT</h1>"
+        "<p>ROBERT JORDAN</p>"
+        "<p>A TOM DOHERTY ASSOCIATES BOOK NEW YORK</p>"
+        "</body></html>"
+    )
+    assert _classify(html, item_id="title", file_name="xhtml/title.html") == "front"
+
+
 def test_classify_about_the_author_is_back() -> None:
     html = (
         "<html><body><h1>About the Author</h1>"
@@ -961,6 +975,141 @@ async def test_pipeline_interpolates_around_snapped_chapter(
     # CHAPTER 2 heading is pinned to ABS chapter.start = 600.0
     assert by_id["para_003"]["audio_start"] == pytest.approx(600.0)
     # Strict monotonicity across the whole sync map
+    for prev, cur in zip(entries, entries[1:]):
+        assert cur["audio_start"] >= prev["audio_start"]
+
+
+async def test_pipeline_snapped_heading_survives_overshooting_predecessor(
+    client: AsyncClient,
+    jwt_headers: dict[str, str],
+    db_session_factory: async_sessionmaker,  # type: ignore[type-arg]
+    tmp_path: Path,
+) -> None:
+    """A fuzzy match that overshoots the next chapter start must not demote the snap.
+
+    The last paragraph of a chapter often fuzzy-matches a few seconds past the
+    ABS start of the next chapter; the snapped heading is ground truth and must
+    stay pinned, with the overshooting predecessor clamped instead.
+    """
+    import re as _re
+
+    paragraphs = [
+        "Opening chapter paragraph with plenty of substantive narrative content "
+        "that keeps the synthesized transcript going for a while longer here.",
+        "CHAPTER 2",
+        "Second chapter opens with substantive content for fuzzy matching.",
+    ]
+    index = {
+        "para_000": {
+            "text": paragraphs[0],
+            "ebook_pos": "/body/DocFragment[1]/body/section[1]/p[1]",
+        },
+        "para_001": {
+            "text": paragraphs[1],
+            "ebook_pos": "/body/DocFragment[2]/body/h2[1]",
+        },
+        "para_002": {
+            "text": paragraphs[2],
+            "ebook_pos": "/body/DocFragment[2]/body/section[1]/p[1]",
+        },
+    }
+    words = _words_for(paragraphs)
+    # _words_for lays out p0's words from t=1.0 at 0.4s each; place the ABS
+    # chapter-2 start 2s before p0's matched end so p0 overshoots it.
+    n0 = len(_re.findall(r"[A-Za-z0-9]+", paragraphs[0]))
+    ch2_start = (1.0 + 0.4 * n0) - 2.0
+    metadata = copy.deepcopy(ABS_METADATA)
+    metadata["media"]["chapters"] = [
+        {"id": 0, "start": 0.0, "end": ch2_start, "title": "Chapter 1: Opening"},
+        {"id": 1, "start": ch2_start, "end": ch2_start + 3.0, "title": "Chapter 2: The Middle"},
+        {"id": 2, "start": ch2_start + 3.0, "end": 1000.0, "title": "Chapter 3: Later"},
+    ]
+
+    resp = await client.post(
+        "/alignment/jobs", json={"abs_item_id": ABS_ITEM_ID}, headers=jwt_headers
+    )
+    job_id = resp.json()["id"]
+
+    await _run_pipeline(
+        job_id, db_session_factory, tmp_path,
+        abs_metadata_override=metadata,
+        paragraphs_override=paragraphs, index_override=index, words_override=words,
+    )
+
+    resp = await client.get(f"/alignment/jobs/{job_id}/sync-map", headers=jwt_headers)
+    entries = resp.json()
+    by_id = {e["id"]: e for e in entries}
+    # The snapped heading stays pinned to the ABS chapter start...
+    assert by_id["para_001"]["audio_start"] == pytest.approx(ch2_start)
+    assert by_id["para_001"]["audio_end"] == pytest.approx(ch2_start + 3.0)
+    # ...and the overshooting predecessor is clamped to it, not vice versa.
+    assert by_id["para_000"]["audio_start"] == pytest.approx(ch2_start)
+    # The following paragraph keeps its genuine fuzzy-matched time.
+    assert by_id["para_002"]["audio_start"] > ch2_start + 3.0
+    for prev, cur in zip(entries, entries[1:]):
+        assert cur["audio_start"] >= prev["audio_start"]
+
+
+async def test_pipeline_positional_snap_survives_overshoot(
+    client: AsyncClient,
+    jwt_headers: dict[str, str],
+    db_session_factory: async_sessionmaker,  # type: ignore[type-arg]
+    tmp_path: Path,
+) -> None:
+    """Positionally-snapped headings are also mandatory anchors in the repair pass."""
+    import re as _re
+
+    paragraphs = [
+        "Opening narrative paragraph with substantive content for fuzzy matching.",
+        "STRANGE BUSINESS",
+        "Short paragraph right after the first narrative chapter heading here.",
+        "A much longer middle paragraph with plenty of substantive narrative "
+        "content that runs on long enough to overshoot the next chapter start.",
+        "LOCAL CUISINE",
+        "Trailing narrative paragraph with substantive content for fuzzy matching.",
+    ]
+    index = {
+        f"para_{i:03d}": {
+            "text": paragraphs[i],
+            "ebook_pos": (
+                f"/body/DocFragment[{(1, 2, 2, 2, 3, 3)[i]}]/body/"
+                + ("h2[1]" if i in (1, 4) else "section[1]/p[1]")
+            ),
+        }
+        for i in range(len(paragraphs))
+    }
+    words = _words_for(paragraphs)
+    starts = {w["word"]: w["start"] for w in words}
+    # ABS titles are generic, so no heading matches by title → positional snap.
+    # Chapter 2 starts exactly at the first heading's spoken time; chapter 3
+    # starts 1s before the long middle paragraph's matched end (overshoot).
+    n_before_h2 = len(_re.findall(r"[A-Za-z0-9]+", " ".join(paragraphs[:4])))
+    p3_end = 1.0 + 0.4 * n_before_h2 + 0.4 * 3  # + inter-paragraph gaps
+    s1 = starts["strange"]
+    s2 = p3_end - 1.0
+    metadata = copy.deepcopy(ABS_METADATA)
+    metadata["media"]["chapters"] = [
+        {"id": 0, "start": 0.0, "end": s1, "title": "01"},
+        {"id": 1, "start": s1, "end": s2, "title": "02"},
+        {"id": 2, "start": s2, "end": 1000.0, "title": "03"},
+    ]
+
+    resp = await client.post(
+        "/alignment/jobs", json={"abs_item_id": ABS_ITEM_ID}, headers=jwt_headers
+    )
+    job_id = resp.json()["id"]
+
+    await _run_pipeline(
+        job_id, db_session_factory, tmp_path,
+        abs_metadata_override=metadata,
+        paragraphs_override=paragraphs, index_override=index, words_override=words,
+    )
+
+    resp = await client.get(f"/alignment/jobs/{job_id}/sync-map", headers=jwt_headers)
+    entries = resp.json()
+    by_id = {e["id"]: e for e in entries}
+    assert by_id["para_001"]["audio_start"] == pytest.approx(s1)
+    assert by_id["para_004"]["audio_start"] == pytest.approx(s2)
     for prev, cur in zip(entries, entries[1:]):
         assert cur["audio_start"] >= prev["audio_start"]
 

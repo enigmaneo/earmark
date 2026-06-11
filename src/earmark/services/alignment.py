@@ -151,11 +151,14 @@ def _is_substantive(soup: object) -> bool:
 
 
 def _heading_text(soup: object) -> str:
+    # No separator between text nodes: drop-cap markup (<span>C</span>ROSSROADS)
+    # must not gain an injected space — "c rossroads…" matches the
+    # Roman-numeral alternative in _BODY_HEADING_RE via the lone "c".
     parts = [
-        h.get_text(" ", strip=True)
+        h.get_text().strip()
         for h in soup.find_all(["h1", "h2", "h3"])  # type: ignore[union-attr]
     ]
-    return " ".join(parts).strip()
+    return " ".join(p for p in parts if p).strip()
 
 
 def _classify_spine_item(
@@ -1204,6 +1207,7 @@ class AlignmentPipeline:
         # pass below, bounding drift to within a single chapter.
         unmatched_headings: list[str] = []
         headings: list[dict] = []  # type: ignore[type-arg]
+        snapped_ids: set[str] = set()
         title_hit = 0
         if chapters:
             for entry in sync_map:
@@ -1221,6 +1225,7 @@ class AlignmentPipeline:
                 ch_end = float(chapters[abs_idx].get("end", ch_start))
                 entry["audio_start"] = ch_start
                 entry["audio_end"] = min(ch_start + 5.0, ch_end)
+                snapped_ids.add(entry["id"])
                 title_hit += 1
 
         # Positional fallback: when no EPUB heading matched a numbered ABS
@@ -1253,6 +1258,7 @@ class AlignmentPipeline:
                 ch_end = float(chapters[abs_idx].get("end", ch_start))
                 entry["audio_start"] = ch_start
                 entry["audio_end"] = min(ch_start + 5.0, ch_end)
+                snapped_ids.add(entry["id"])
                 snapped += 1
             logger.info(
                 "Positional chapter snap applied: offset=%d, snapped=%d/%d",
@@ -1270,10 +1276,42 @@ class AlignmentPipeline:
         # after the previous anchor's audio_end — that guarantees strictly
         # monotonic timestamps across consecutive anchors, so interpolated
         # spans always have non-negative width.
+        #
+        # Snapped chapter headings are ground truth and must survive this
+        # pass: without special treatment, a fuzzy match that overshoots the
+        # next chapter start by even a few seconds would demote the snapped
+        # heading to a "regressing" entry and re-interpolate it (e.g. a 3 s
+        # overshoot at a chapter boundary became an 11 s heading error).
+        # They are therefore mandatory anchors, and an ordinary entry may
+        # only become an anchor if it doesn't overshoot the next mandatory
+        # one — which also keeps interpolation spans non-negative.
+        mandatory: list[int] = []
+        for i, entry in enumerate(sync_map):
+            if entry["id"] in snapped_ids and (
+                not mandatory
+                or float(entry["audio_start"])
+                > float(sync_map[mandatory[-1]]["audio_start"])
+            ):
+                mandatory.append(i)
+
         anchors: list[int] = []
         last_end = -1.0
+        mand_pos = 0
         for i, entry in enumerate(sync_map):
-            if entry["audio_start"] >= last_end:
+            if mand_pos < len(mandatory) and mandatory[mand_pos] == i:
+                anchors.append(i)
+                last_end = float(entry["audio_end"])
+                mand_pos += 1
+                continue
+            next_mand_start = (
+                float(sync_map[mandatory[mand_pos]]["audio_start"])
+                if mand_pos < len(mandatory)
+                else None
+            )
+            if entry["audio_start"] >= last_end and (
+                next_mand_start is None
+                or float(entry["audio_end"]) <= next_mand_start
+            ):
                 anchors.append(i)
                 last_end = entry["audio_end"]
 
@@ -1289,6 +1327,13 @@ class AlignmentPipeline:
                 frac = k / count
                 sync_map[a + k]["audio_start"] = t0 + span * frac
                 sync_map[a + k]["audio_end"] = t0 + span * ((k + 0.5) / count)
+        # Leading non-anchors (possible when the first anchor is a snapped
+        # heading that earlier entries overshoot): clamp to its start.
+        if anchors and anchors[0] > 0:
+            head_t = sync_map[anchors[0]]["audio_start"]
+            for i in range(anchors[0]):
+                sync_map[i]["audio_start"] = head_t
+                sync_map[i]["audio_end"] = head_t
         # Trailing non-anchors: clamp to last anchor's end.
         if anchors and anchors[-1] < len(sync_map) - 1:
             last_a = anchors[-1]
