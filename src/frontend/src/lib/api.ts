@@ -68,6 +68,7 @@ export interface MappingRead {
 	sync_status: string | null;
 	sync_progress: number | null;
 	sync_error: string | null;
+	sync_warnings: string[];
 	cache_intact: boolean | null;
 	reading_percentage: number | null;
 }

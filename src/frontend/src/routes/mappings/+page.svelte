@@ -64,6 +64,20 @@
 		'assembling'
 	]);
 
+	// Both terminal success states — a job that finished with benign validation
+	// warnings still produced a sync map and must count as mapped.
+	const COMPLETE_STATUSES = new Set(['complete', 'complete_with_warnings']);
+
+	function hasWarnings(m: MappingRead): boolean {
+		return (m.sync_warnings?.length ?? 0) > 0;
+	}
+
+	// One warning per line — both the native title tooltip and the revealOnTap
+	// popup (whitespace-pre-line) render the newlines as a list.
+	function warningsText(m: MappingRead): string {
+		return m.sync_warnings?.join('\n') ?? '';
+	}
+
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 	async function pollMappings() {
@@ -74,7 +88,7 @@
 			const prev = mappings.find((p) => p.id === m.id);
 			if (m.sync_status === 'failed' && prev && ACTIVE_STATUSES.has(prev.sync_status ?? '')) {
 				toaster.create({ type: 'error', title: `Alignment failed for "${m.abs_title}"` });
-			} else if ((m.sync_status === 'complete' || m.sync_status === 'complete_with_warnings') && prev && ACTIVE_STATUSES.has(prev.sync_status ?? '')) {
+			} else if (COMPLETE_STATUSES.has(m.sync_status ?? '') && prev && ACTIVE_STATUSES.has(prev.sync_status ?? '')) {
 				toaster.create({ type: 'success', title: `Alignment complete for "${m.abs_title}"` });
 			}
 		}
@@ -104,7 +118,7 @@
 				const prev = mappings.find((p) => p.id === m.id);
 				if (m.sync_status === 'failed' && prev && ACTIVE_STATUSES.has(prev.sync_status ?? '')) {
 					toaster.create({ type: 'error', title: `Alignment failed for "${m.abs_title}"` });
-				} else if ((m.sync_status === 'complete' || m.sync_status === 'complete_with_warnings') && prev && ACTIVE_STATUSES.has(prev.sync_status ?? '')) {
+				} else if (COMPLETE_STATUSES.has(m.sync_status ?? '') && prev && ACTIVE_STATUSES.has(prev.sync_status ?? '')) {
 					toaster.create({ type: 'success', title: `Alignment complete for "${m.abs_title}"` });
 				}
 			}
@@ -336,6 +350,32 @@
 		</form>
 	</div>
 
+	{#snippet warnIcon(text: string, extraClass: string)}
+		<span
+			class="text-warning-500 inline-flex shrink-0 cursor-help align-middle {extraClass}"
+			title={text}
+			use:revealOnTap={{ text, always: true }}
+			role="img"
+			aria-label="Completed with warnings"
+		>
+			<svg
+				xmlns="http://www.w3.org/2000/svg"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				class="h-4 w-4"
+				aria-hidden="true"
+			>
+				<circle cx="12" cy="12" r="10" />
+				<line x1="12" x2="12" y1="8" y2="12" />
+				<line x1="12" x2="12.01" y1="16" y2="16" />
+			</svg>
+		</span>
+	{/snippet}
+
 	<div class="table-wrap">
 		<table class="table table-hover" style="table-layout: fixed; width: 100%;">
 			<thead>
@@ -354,15 +394,23 @@
 						class="hover:bg-surface-200-800 transition-colors {m.kosync_document ? 'cursor-pointer' : ''}"
 						onclick={() => handleRowClick(m)}
 					>
-						<td class="max-w-xs truncate" title={m.abs_title} use:revealOnTap={m.abs_title}>{m.abs_title}</td>
+						<td class="max-w-xs" title={m.abs_title}>
+							<div class="flex min-w-0 items-center gap-1.5">
+								<span class="truncate" use:revealOnTap={m.abs_title}>{m.abs_title}</span>
+								{#if hasWarnings(m)}{@render warnIcon(warningsText(m), 'md:hidden')}{/if}
+							</div>
+						</td>
 						<td class="hidden md:table-cell max-w-xs truncate" title={m.abs_author ?? '—'} use:revealOnTap={m.abs_author ?? '—'}>{m.abs_author ?? '—'}</td>
 						<td class="hidden md:table-cell overflow-hidden">
 							{#if ACTIVE_STATUSES.has(m.sync_status ?? '')}
 								<span class="text-xs tabular-nums">{m.sync_progress ?? 0}%</span>
 							{:else if m.sync_status === 'failed'}
 								<span class="badge preset-filled-error-500 text-xs" title={m.sync_error ?? undefined}>Failed</span>
-							{:else if m.cache_intact === true || m.sync_status === 'complete'}
-								<span class="badge preset-filled-success-500 text-xs">Mapped</span>
+							{:else if m.cache_intact === true || COMPLETE_STATUSES.has(m.sync_status ?? '')}
+								<span class="inline-flex items-center gap-1.5">
+									<span class="badge preset-filled-success-500 text-xs">Completed</span>
+									{#if hasWarnings(m)}{@render warnIcon(warningsText(m), '')}{/if}
+								</span>
 							{:else}
 								<span class="badge preset-filled-warning-500 text-xs">Unmapped</span>
 							{/if}
@@ -405,7 +453,7 @@
 							>
 								<input type="hidden" name="id" value={m.id} />
 								<button type="submit" class="btn btn-sm preset-outlined-primary-500" disabled={anyActive}>
-									{m.sync_status === 'complete' || m.sync_status === 'failed' ? 'Re-sync' : 'Sync'}
+									{COMPLETE_STATUSES.has(m.sync_status ?? '') || m.sync_status === 'failed' ? 'Re-sync' : 'Sync'}
 								</button>
 							</form>
 							<form

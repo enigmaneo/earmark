@@ -1025,3 +1025,50 @@ def test_stage_progress_monotonic() -> None:
         v = _stage_progress(pct)
         assert v >= prev, f"regression at {pct}: {v} < {prev}"
         prev = v
+
+
+# ── MappingRead.sync_warnings decoding ────────────────────────────────────────
+
+
+def _mapping_read_with_warnings(raw: object) -> "list[str]":
+    from datetime import UTC, datetime
+
+    from earmark.schemas import MappingRead
+
+    m = MappingRead(
+        id=1,
+        user_id=1,
+        abs_item_id="x",
+        abs_title="t",
+        abs_author=None,
+        ebook_source="local",
+        ebook_path=None,
+        ebook_filename=None,
+        ebook_source_ref=None,
+        kosync_document=None,
+        created_at=datetime.now(UTC),
+        sync_warnings=raw,
+    )
+    return m.sync_warnings
+
+
+def test_mapping_read_decodes_json_warnings_string() -> None:
+    # AlignmentJob.warnings is stored as a JSON-encoded string column.
+    raw = '["suspect_first_entry: \'X\'", "docfragment_gap: missing [7]"]'
+    assert _mapping_read_with_warnings(raw) == [
+        "suspect_first_entry: 'X'",
+        "docfragment_gap: missing [7]",
+    ]
+
+
+def test_mapping_read_warnings_none_and_empty() -> None:
+    assert _mapping_read_with_warnings(None) == []
+    assert _mapping_read_with_warnings("") == []
+
+
+def test_mapping_read_warnings_malformed_json() -> None:
+    assert _mapping_read_with_warnings("{not json") == []
+
+
+def test_mapping_read_warnings_passthrough_list() -> None:
+    assert _mapping_read_with_warnings(["a", "b"]) == ["a", "b"]
