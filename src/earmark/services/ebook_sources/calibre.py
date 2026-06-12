@@ -2,6 +2,7 @@ import base64
 import logging
 import re
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -78,7 +79,8 @@ class CalibreOpdsSource:
         if not query or not norm_title:
             return []
 
-        async with self._client() as client:
+        timeout = httpx.Timeout(10.0, read=30.0)
+        async with self._client(timeout=timeout) as client:
             resp = await client.get(
                 f"/opds/search/{query}",
                 headers=self._headers(),
@@ -89,14 +91,34 @@ class CalibreOpdsSource:
 
         return _parse_opds_feed(xml_text, norm_title, norm_author)
 
+    def _safe_ref_url(self, ref: str) -> str:
+        """Resolve an OPDS acquisition ref against the configured Calibre host.
+
+        OPDS hrefs may be relative; resolve them against the base URL and reject
+        anything that points to another host or a non-http(s) scheme, so a
+        malicious/compromised feed can't drive a fetch to file:// or an internal
+        service (SSRF).
+        """
+        resolved = urljoin(self._base_url, ref)
+        parts = urlsplit(resolved)
+        base = urlsplit(self._base_url)
+        if parts.scheme not in ("http", "https"):
+            raise ValueError(f"Refusing non-http(s) ebook ref: {ref!r}")
+        if parts.netloc != base.netloc:
+            raise ValueError(
+                f"Refusing ebook ref outside the configured Calibre host: {ref!r}"
+            )
+        return resolved
+
     async def fetch(self, ref: str, dest: Path) -> None:
         if not self._base_url:
             raise RuntimeError("Calibre Web URL is not configured (CWA_URL).")
+        url = self._safe_ref_url(ref)
         dest.parent.mkdir(parents=True, exist_ok=True)
         timeout = httpx.Timeout(10.0, read=300.0)
         async with self._client(timeout=timeout) as client:
             async with client.stream(
-                "GET", ref, headers=self._headers(), follow_redirects=True
+                "GET", url, headers=self._headers(), follow_redirects=True
             ) as resp:
                 resp.raise_for_status()
                 with dest.open("wb") as f:
@@ -195,6 +217,9 @@ def _parse_opds_feed(
 ) -> list[EbookCandidate]:
     from bs4 import BeautifulSoup
 
+    # Uses lxml's XML parser, which by default does not fetch external DTDs or
+    # resolve external entities (no network), mitigating XXE. The feed source is
+    # the admin-configured Calibre server.
     soup = BeautifulSoup(xml_text, "xml")
     # (tier, author_rank, format_priority, EbookCandidate)
     ranked: list[tuple[int, int, int, EbookCandidate]] = []

@@ -78,11 +78,16 @@
 		return m.sync_warnings?.join('\n') ?? '';
 	}
 
-	let pollTimer: ReturnType<typeof setInterval> | null = null;
+	let pollTimer: ReturnType<typeof setTimeout> | null = null;
+	let pollFailures = 0;
+	const POLL_BASE_MS = 2000;
+	const POLL_MAX_FAILURES = 5;
 
+	// Throws on network/parse/HTTP errors so the caller can back off; never
+	// fails silently and leaves the UI frozen on stale sync status.
 	async function pollMappings() {
 		const res = await fetch('/mappings/poll');
-		if (!res.ok) return;
+		if (!res.ok) throw new Error(`poll failed: ${res.status}`);
 		const updated = (await res.json()) as MappingRead[];
 		for (const m of updated) {
 			const prev = mappings.find((p) => p.id === m.id);
@@ -95,16 +100,37 @@
 		mappings = updated;
 	}
 
+	function stopPolling() {
+		if (pollTimer) {
+			clearTimeout(pollTimer);
+			pollTimer = null;
+		}
+	}
+
 	function startPolling() {
 		if (pollTimer) return;
-		pollTimer = setInterval(async () => {
+		const tick = async () => {
 			if (!mappings.some((m) => m.sync_status && ACTIVE_STATUSES.has(m.sync_status))) {
-				clearInterval(pollTimer!);
-				pollTimer = null;
+				stopPolling();
 				return;
 			}
-			await pollMappings();
-		}, 2000);
+			let delay = POLL_BASE_MS;
+			try {
+				await pollMappings();
+				pollFailures = 0;
+			} catch {
+				pollFailures += 1;
+				if (pollFailures >= POLL_MAX_FAILURES) {
+					toaster.create({ type: 'error', title: 'Lost connection to the server; stopped updating.' });
+					stopPolling();
+					return;
+				}
+				// Exponential backoff while the server is unreachable.
+				delay = POLL_BASE_MS * 2 ** pollFailures;
+			}
+			pollTimer = setTimeout(tick, delay);
+		};
+		pollTimer = setTimeout(tick, POLL_BASE_MS);
 	}
 
 	let anyActive = $derived(
@@ -128,10 +154,7 @@
 			}
 		});
 		return () => {
-			if (pollTimer) {
-				clearInterval(pollTimer);
-				pollTimer = null;
-			}
+			stopPolling();
 		};
 	});
 
@@ -141,18 +164,28 @@
 		}
 	}
 
+	let calibreRequest: AbortController | null = null;
+
 	async function loadCalibreCandidates(absItemId: string) {
+		// Cancel any in-flight request so a slow earlier response can't overwrite
+		// the candidates for the currently selected item.
+		calibreRequest?.abort();
 		if (!absItemId) {
+			calibreRequest = null;
 			calibreCandidates = [];
 			calibreError = null;
 			selectedCalibreRef = '';
 			return;
 		}
+		const controller = new AbortController();
+		calibreRequest = controller;
 		calibreLoading = true;
 		calibreError = null;
 		selectedCalibreRef = '';
 		try {
-			const res = await fetch(`/mappings/calibre?abs_item_id=${encodeURIComponent(absItemId)}`);
+			const res = await fetch(`/mappings/calibre?abs_item_id=${encodeURIComponent(absItemId)}`, {
+				signal: controller.signal
+			});
 			if (!res.ok) {
 				const body = await res.json().catch(() => ({}));
 				calibreError = body.error ?? 'Calibre Web request failed';
@@ -163,11 +196,15 @@
 			if (calibreCandidates.length === 1) {
 				selectedCalibreRef = calibreCandidates[0].ref;
 			}
-		} catch {
+		} catch (err) {
+			if (err instanceof DOMException && err.name === 'AbortError') return;
 			calibreError = 'Calibre Web request failed';
 			calibreCandidates = [];
 		} finally {
-			calibreLoading = false;
+			if (calibreRequest === controller) {
+				calibreLoading = false;
+				calibreRequest = null;
+			}
 		}
 	}
 

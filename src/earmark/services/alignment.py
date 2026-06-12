@@ -18,11 +18,14 @@ from earmark.models import AbsEbookMapping, AbsLibraryItem, AlignmentJob
 from earmark.services.audiobookshelf import AudiobookshelfClient
 from earmark.services.ebook_sources import CalibreOpdsSource, LocalEbookSource
 from earmark.services.progress import link_progress_to_mapping
-from earmark.utils import partial_md5
+from earmark.utils import partial_md5, safe_subpath
 
 logger = logging.getLogger(__name__)
 
 # ── synchronous helpers (run via asyncio.to_thread) ────────────────────────────
+
+# Upper bound on the diagnostic raw_metadata blob persisted per library item.
+_MAX_RAW_METADATA_CHARS = 256 * 1024
 
 _BLOCK_TAGS: list[str] = ["p", "h1", "h2", "h3", "h4", "h5", "h6"]
 
@@ -834,7 +837,12 @@ class AlignmentPipeline:
             f.get("duration", 0) for f in audio_files
         )
         lib_item.abs_updated_at = abs_updated_at
-        lib_item.raw_metadata = json.dumps(item)
+        # Cap the stored blob so a hostile/oversized ABS payload can't bloat the
+        # DB. raw_metadata is diagnostic-only (never parsed back by the app).
+        raw = json.dumps(item)
+        if len(raw) > _MAX_RAW_METADATA_CHARS:
+            raw = json.dumps({"_truncated": True, "bytes": len(raw)})
+        lib_item.raw_metadata = raw
         await self.session.commit()
 
         # Invalidate stale cache
@@ -918,7 +926,11 @@ class AlignmentPipeline:
 
         # Legacy / CLI path: explicit local path on the job.
         if source in (None, "local") and self.job.ebook_path:
-            src = Path(settings.ebook_local_root) / self.job.ebook_path
+            src = safe_subpath(settings.ebook_local_root, self.job.ebook_path)
+            if src is None:
+                raise ValueError(
+                    f"ebook_path escapes the local root: {self.job.ebook_path!r}"
+                )
             await asyncio.to_thread(shutil.copy2, src, dest)
             return
 
@@ -1047,12 +1059,16 @@ class AlignmentPipeline:
         import queue as _queue
 
         # The queue carries percent floats from the worker thread plus a
-        # single None sentinel to cleanly terminate the drain coroutine.
-        prog_q: _queue.Queue = _queue.Queue()
+        # single None sentinel to cleanly terminate the drain coroutine. Bounded
+        # so a fast producer can't grow it without limit; progress is monotonic,
+        # so dropping an update when full is harmless.
+        prog_q: _queue.Queue = _queue.Queue(maxsize=512)
 
         def _cb(percent: float) -> None:
             try:
                 prog_q.put_nowait(float(percent))
+            except _queue.Full:  # drop — a later update supersedes it
+                pass
             except Exception:  # pragma: no cover — never raise out of the worker
                 pass
 
@@ -1107,7 +1123,9 @@ class AlignmentPipeline:
                 progress_cb=_cb,
             )
         finally:
-            prog_q.put_nowait(None)  # sentinel — ends the drain loop
+            # Blocking put so the sentinel is never dropped on a full queue
+            # (a dropped sentinel would leave _drain looping forever).
+            await asyncio.to_thread(prog_q.put, None)  # sentinel — ends the drain loop
             heartbeat_task.cancel()
             await drain_task
             try:

@@ -5,14 +5,31 @@ import { config } from '$lib/server/config';
 
 const BACKEND = config.backendUrl;
 
+const SORT_BY_VALUES: readonly SortBy[] = [
+	'title',
+	'percentage',
+	'progress',
+	'device',
+	'is_latest',
+	'updated_at',
+];
+const SORT_DIR_VALUES: readonly SortDir[] = ['asc', 'desc'];
+
 export const load: PageServerLoad = async ({ cookies, url }) => {
 	const token = cookies.get('earmark_session');
 	if (!token) redirect(302, '/login');
 
 	const document = url.searchParams.get('document') ?? undefined;
-	const sort_by = (url.searchParams.get('sort_by') as SortBy) || 'updated_at';
-	const sort_dir = (url.searchParams.get('sort_dir') as SortDir) || 'desc';
-	const page = Number(url.searchParams.get('page') ?? 1);
+	const sortByParam = url.searchParams.get('sort_by');
+	const sortDirParam = url.searchParams.get('sort_dir');
+	const sort_by: SortBy = SORT_BY_VALUES.includes(sortByParam as SortBy)
+		? (sortByParam as SortBy)
+		: 'updated_at';
+	const sort_dir: SortDir = SORT_DIR_VALUES.includes(sortDirParam as SortDir)
+		? (sortDirParam as SortDir)
+		: 'desc';
+	const pageNum = Number(url.searchParams.get('page') ?? 1);
+	const page = Number.isInteger(pageNum) && pageNum >= 1 ? pageNum : 1;
 
 	const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 

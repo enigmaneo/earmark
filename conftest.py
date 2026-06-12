@@ -7,8 +7,19 @@ from sqlalchemy.pool import StaticPool
 
 from earmark.database import Base, get_session
 from earmark.main import app
+from earmark.ratelimit import limiter
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
+
+
+@pytest.fixture(autouse=True)
+def _disable_rate_limiting():
+    # The login/register limiter would otherwise trip across the many requests a
+    # single test client makes from one address. Rate limiting is exercised
+    # separately; disable it for the rest of the suite.
+    limiter.enabled = False
+    yield
+    limiter.enabled = True
 
 
 @pytest.fixture
