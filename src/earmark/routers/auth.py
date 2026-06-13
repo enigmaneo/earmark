@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,13 +10,17 @@ from earmark.earmark_auth import (
     verify_password,
 )
 from earmark.models import User
+from earmark.ratelimit import limiter
 from earmark.schemas import TokenResponse, UserCreate, UserRead
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
-async def register(body: UserCreate, session: AsyncSession = Depends(get_session)) -> User:
+@limiter.limit("10/minute")
+async def register(
+    request: Request, body: UserCreate, session: AsyncSession = Depends(get_session)
+) -> User:
     existing = await session.execute(select(User).where(User.email == body.email))
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(
@@ -30,7 +34,10 @@ async def register(body: UserCreate, session: AsyncSession = Depends(get_session
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: UserCreate, session: AsyncSession = Depends(get_session)) -> TokenResponse:
+@limiter.limit("10/minute")
+async def login(
+    request: Request, body: UserCreate, session: AsyncSession = Depends(get_session)
+) -> TokenResponse:
     result = await session.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
     if user is None or not verify_password(body.password, user.password_hash):

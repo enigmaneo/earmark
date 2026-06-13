@@ -372,7 +372,7 @@ This format is critical: KOReader's CRE engine navigates positions using the rea
 
 This is the critical design invariant: **the sequential paragraph ID is the sole join key between the audio timeline and the EPUB position.**
 
-EPUB paragraphs are matched to audio time ranges by fuzzy-matching paragraph text against the `faster-whisper` word-level transcript. The matcher uses **proportional positioning** — paragraph `i` of `n` is searched in a window centered on the transcript character offset `total * i/n`:
+EPUB paragraphs are matched to audio time ranges by fuzzy-matching paragraph text against the `faster-whisper` word-level transcript. Each paragraph is searched in a window centered on its **expected audio position**. When EPUB chapter headings map to ground-truth ABS chapter starts (the common case), that position is found by interpolating between the surrounding chapter anchors so the search stays inside the paragraph's own chapter (`_align_paragraphs_anchored`, §12). Only when no heading maps to a chapter does the matcher fall back to **global proportional positioning** — paragraph `i` of `n` searched in a window centered on the transcript character offset `total * i/n` (`_align_paragraphs_to_transcript`):
 
 ```
 EPUB spine (reading order)
@@ -393,7 +393,8 @@ faster-whisper transcribes the audio → word-level timestamps
   ▼
 Build a normalized transcript string + (char → time) mapping.
 For each paragraph in order, rapidfuzz finds the best partial-ratio
-substring match in a window centered on its proportional position.
+substring match in a window centered on its expected position
+(chapter-anchored when headings map to ABS, else proportional).
 The matched char range maps back to (audio_start, audio_end).
 Paragraphs whose best score is below `min_score=45` are recorded
 as None and dropped.
@@ -402,7 +403,7 @@ as None and dropped.
   para_001: audio 5.30–12.10   ebook_pos /body/DocFragment[1]/body/section[1]/p[2]
 ```
 
-**Invariant:** every paragraph is searched independently in a window around its proportional expected position — there is no forward cursor that consecutive paragraphs share. This dropped an earlier failure mode where a single fuzzy mismatch near the start of a long book pushed the cursor far ahead of where later paragraphs actually appear, starving them of search range. Monotonicity is restored later by the anchor + linear-interpolation post-pass (see §13). Paragraphs that don't appear in the audio (front-matter blurbs, back-matter acknowledgments) score below `min_score` and are dropped from the final map — they never poison the alignment of surrounding paragraphs.
+**Invariant:** every paragraph is searched independently in a window around its expected position — there is no forward cursor that consecutive paragraphs share. This dropped an earlier failure mode where a single fuzzy mismatch near the start of a long book pushed the cursor far ahead of where later paragraphs actually appear, starving them of search range. Anchoring that window on ABS chapter boundaries (rather than a single global proportional estimate) keeps the search inside the right chapter: a global estimate assumes paragraph index maps linearly to audio position, which drifts by tens of minutes on books with dense front matter or an unusually long prologue and pulls early paragraphs into the wrong region. Monotonicity is restored later by the anchor + linear-interpolation post-pass (see §13). Paragraphs that don't appear in the audio (front-matter blurbs, back-matter acknowledgments) score below `min_score` and are dropped from the final map — they never poison the alignment of surrounding paragraphs.
 
 ---
 
@@ -481,7 +482,7 @@ The cached-transcript path skips both the drain and the heartbeat — it jumps s
 
 ## 12. Paragraph Matching (rapidfuzz)
 
-`faster-whisper` gives a stream of timestamped words. Each EPUB paragraph is mapped onto a contiguous run of those words by **proportional-position fuzzy substring matching**.
+`faster-whisper` gives a stream of timestamped words. Each EPUB paragraph is mapped onto a contiguous run of those words by **fuzzy substring matching in a window around the paragraph's expected audio position**. A shared helper, `_match_in_window`, runs `rapidfuzz.fuzz.partial_ratio_alignment` over the transcript slice and maps the matched char range back to `(audio_start, audio_end)`; the two aligners differ only in how they choose the window center.
 
 ```python
 def _build_transcript_index(words):
@@ -489,33 +490,25 @@ def _build_transcript_index(words):
     # word's (char_start, char_end, time_start, time_end).
     ...
 
-def _align_paragraphs_to_transcript(paragraphs, transcript, ranges,
-                                    min_score=45.0):
+def _match_in_window(p_norm, transcript, ranges, expected_char, min_score):
     from rapidfuzz import fuzz
-    n, total = len(paragraphs), len(transcript)
-    for i, p in enumerate(paragraphs):
-        p_norm = _normalize_text(p)
-        if not p_norm:
-            yield None
-            continue
-        expected = int(total * (i / n))
-        half = max(8_000, len(p_norm) * 5)
-        win_start = max(0, expected - half)
-        win_end   = min(total, expected + half)
-        m = fuzz.partial_ratio_alignment(p_norm, transcript[win_start:win_end])
-        if m.score < min_score:
-            yield None                                  # not narrated in audio
-            continue
-        m_start = win_start + m.dest_start
-        m_end   = win_start + m.dest_end
-        t_start = ranges[_word_index_at_char(ranges, m_start)][2]
-        t_end   = ranges[_word_index_at_char(ranges, max(m_end - 1, m_start))][3]
-        yield (t_start, t_end)
+    half = max(8_000, len(p_norm) * 5)
+    win_start, win_end = max(0, expected_char - half), expected_char + half
+    m = fuzz.partial_ratio_alignment(p_norm, transcript[win_start:win_end])
+    if m.score < min_score:
+        return None                                     # not narrated in audio
+    t_start = ranges[_word_index_at_char(ranges, win_start + m.dest_start)][2]
+    t_end   = ranges[_word_index_at_char(ranges, win_start + m.dest_end - 1)][3]
+    return (t_start, t_end)
 ```
 
-Two properties matter:
+**Chapter-anchored positioning (`_align_paragraphs_anchored`, primary path).** EPUB chapter headings (`PROLOGUE` / `CHAPTER N` / `EPILOGUE`) that match a ground-truth ABS chapter start give an ordered list of `(paragraph_index, audio_time)` anchors, strictly increasing in both fields. A paragraph's expected audio time is the linear interpolation between its bracketing anchors (in paragraph-index space), converted to a char offset via the transcript index. A match is rejected (left `None` for the §13 interpolation pass to fill) if it lands outside the bracketing chapter span ± 30 s, so a phrase that repeats in a neighbouring chapter can't drag the paragraph there. Anchor heading paragraphs are always emitted so the §13 chapter snap can pin them, even when the audio timeline diverges from ABS.
 
-1. **Proportional positioning.** Each paragraph is searched in its own window centered on `total * i/n` — there is no shared cursor that consecutive paragraphs advance. An earlier implementation kept a forward cursor; on a long book like *Winter's Heart* one mismatched fuzzy hit could drift the cursor several thousand characters past expected, so later paragraphs found their window starting beyond their actual narration. Independent windows fix that, at the cost of allowing local out-of-order matches inside a chapter (a phrase that repeats two pages apart can match either occurrence). The anchor + interpolation pass in §13 restores strict monotonicity.
+**Global proportional positioning (`_align_paragraphs_to_transcript`, fallback).** When no heading maps to an ABS chapter, each paragraph is searched at `expected_char = int(total * i / n)` instead. This is robust to ABS audio splitting a chapter the EPUB keeps whole, but on books with dense front matter or a very long prologue the index→position assumption drifts badly, which is why the anchored path is preferred whenever chapters are available.
+
+Two further properties matter:
+
+1. **Independent windows, no shared cursor.** Each paragraph is searched on its own; consecutive paragraphs do not advance a shared cursor. An earlier implementation kept a forward cursor; on a long book one mismatched fuzzy hit could drift the cursor several thousand characters past expected, starving later paragraphs of search range. Independent windows fix that, at the cost of allowing local out-of-order matches inside a chapter (a phrase that repeats two pages apart can match either occurrence). The anchor + interpolation pass in §13 restores strict monotonicity.
 2. **Per-paragraph score gate.** If the best match scores below `min_score=45`, the paragraph is recorded as `None` and dropped from the final sync map. This is how unnarrated back matter (acknowledgments, copyright pages) and unmapped front matter naturally fall out of the result. The threshold sits below the default `60` because `tiny.en`/`base.en` transcripts have non-trivial word-level noise; values much higher cause whole chapters to fail matching on small models.
 
 Together with chapter snapping (§13), this lets the pipeline degrade gracefully when ABS audio splits a chapter that the EPUB keeps whole, or when either side has extra material.
@@ -549,7 +542,7 @@ sync_map_path.write_text(json.dumps(sync_map, indent=2, ensure_ascii=False))
 Two refinement passes run on `sync_map` before it's persisted:
 
 1. **Chapter snap.** Every entry whose `ebook_pos` ends in `/h[1-6][N]` and whose `text_snippet` matches `PROLOGUE` / `EPILOGUE` / `CHAPTER N` (Arabic or Roman) is forced to the corresponding ABS `chapters[i].start`. `_match_heading_to_abs_chapter` does the lookup by parsing the chapter number from the heading text and finding the ABS chapter whose `title` contains the same number (or the first `Prologue` chapter that doesn't look like a "Part 2+" split). ABS chapter starts are publisher-supplied ground truth; without this step, fuzzy-match drift accumulates to tens of minutes over a long book. Headings with no ABS counterpart get an `unmatched_chapter_heading` warning and are left at their fuzzy-matched time.
-2. **Anchor + interpolation.** A forward scan picks every entry whose `audio_start ≥ previous_anchor.audio_end` as an anchor (the chapter-snapped entries are anchors by virtue of being on the audio timeline). Each run of non-anchor entries between two consecutive anchors is linearly re-distributed across the time span between them. This bounds local drift to a single chapter and guarantees monotonic timestamps.
+2. **Anchor + interpolation.** A forward scan picks every entry whose `audio_start ≥ previous_anchor.audio_end` as an anchor. Chapter-snapped headings (from either snap path) are **mandatory anchors**: they are ground truth and always survive this scan, and an ordinary entry can only become an anchor if it doesn't overshoot the next snapped heading's start — otherwise a fuzzy match running a few seconds past a chapter boundary would demote the snapped heading and re-interpolate it (a 3 s overshoot at a boundary used to become an 11 s heading error). Each run of non-anchor entries between two consecutive anchors is linearly re-distributed across the time span between them; entries before the first anchor are clamped to its start, entries after the last anchor to its end. This bounds local drift to a single chapter and guarantees monotonic timestamps.
 
 After these passes, the pipeline runs `_validate_sync_map` (see [§16a](#16a-validation-warnings)) and any warnings are persisted on the `alignment_jobs.warnings` column (JSON-encoded `list[str]`). The job's terminal `status` is:
 
@@ -639,6 +632,7 @@ Install on Debian/Ubuntu: `apt-get install ffmpeg`
 | Ebook download HTTP error | `fetching_ebook` | Retry 3× with exponential backoff; fail job after exhaustion |
 | Unsupported audio format | `fetching_audio` | Set `status=failed`, `error_message="Unsupported audio format: {ext}"` |
 | ffmpeg concatenation error | `aligning` | Set `status=failed`, `error_message=str(e)` |
+| Concatenated track shorter than the sum of inputs | `aligning` | Set `status=failed` with `"Audio concatenation truncated: …"`. The concat demuxer can skip an unreadable/odd path (e.g. an apostrophe in a filename) and still exit 0, silently dropping every file after it; the duration guard catches this before transcription wastes ~30 min on a partial track. Filenames are escaped per the concat-list syntax (`'` → `'\''`) so this should not trigger in normal operation. |
 | `faster-whisper` raises an exception | `aligning` | Capture exception message; set `status=failed`, `error_message=str(e)` |
 | Cache stale (`abs_updated_at` newer) | Pre-flight | Delete cached files; create a new `AlignmentJob` row; re-run from scratch |
 | Partial cache (audio present, ebook missing) | Pre-flight | Re-download missing files only; reuse what is present |

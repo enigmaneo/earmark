@@ -5,11 +5,15 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
 
 from earmark.app_settings import get_effective_int, seed_settings
 from earmark.config import settings
 from earmark.database import AsyncSessionLocal, init_db
+from earmark.ratelimit import limiter
 from earmark.routers import alignment, auth, mappings, progress, users
 from earmark.routers import settings as settings_router
 from earmark.routers.progress import web_router
@@ -56,12 +60,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(title="earmark", lifespan=lifespan)
 
+app.state.limiter = limiter
+# slowapi's handler is typed (Request, RateLimitExceeded) -> Response, which
+# doesn't match Starlette's broader (Request, Exception) handler signature.
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+app.add_middleware(SlowAPIMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # Headers and paths whose contents must never be written to logs.

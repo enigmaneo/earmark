@@ -5,6 +5,7 @@ from pathlib import Path
 
 from earmark.config import settings
 from earmark.services.ebook_sources.base import EbookCandidate, normalize
+from earmark.utils import safe_subpath
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,8 @@ class LocalEbookSource:
         ]
 
     async def fetch(self, ref: str, dest: Path) -> None:
-        src = self._root / ref
+        src = safe_subpath(self._root, ref)
+        if src is None:
+            raise ValueError(f"Ebook ref escapes the local root: {ref!r}")
         dest.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(shutil.copy2, src, dest)

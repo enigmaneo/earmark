@@ -198,6 +198,7 @@ class MappingRead(BaseModel):
     sync_status: str | None = None
     sync_progress: int | None = None
     sync_error: str | None = None
+    sync_warnings: list[str] = []
     cache_intact: bool | None = None
     reading_percentage: float | None = None
 
@@ -206,3 +207,18 @@ class MappingRead(BaseModel):
     @field_serializer("created_at")
     def _ser_created_at(self, dt: datetime) -> str:
         return _utc_iso(dt)
+
+    @field_validator("sync_warnings", mode="before")
+    @classmethod
+    def _decode_sync_warnings(cls, v: object) -> list[str]:
+        if v is None or v == "":
+            return []
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            try:
+                decoded = json.loads(v)
+                return decoded if isinstance(decoded, list) else []
+            except json.JSONDecodeError:
+                return []
+        return []

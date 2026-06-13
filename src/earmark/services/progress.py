@@ -86,6 +86,7 @@ async def write_reading_progress(
     authors: str | None = None,
     filename: str | None = None,
     updated_at: datetime | None = None,
+    commit: bool = True,
 ) -> ReadingProgress:
     existing_latest = (
         await session.execute(
@@ -145,6 +146,9 @@ async def write_reading_progress(
         updated_at=updated_at or datetime.now(UTC),
     )
     session.add(record)
-    await session.commit()
-    await session.refresh(record)
+    if commit:
+        await session.commit()
+        await session.refresh(record)
+    else:
+        await session.flush()
     return record

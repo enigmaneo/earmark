@@ -88,6 +88,7 @@ def _mapping_to_schema(
         sync_status=job.status if job else None,
         sync_progress=job.progress if job else None,
         sync_error=job.error_message if job else None,
+        sync_warnings=job.warnings if job else None,
         cache_intact=_check_cache_intact(m.abs_item_id, lib_item),
         reading_percentage=reading_percentage,
     )

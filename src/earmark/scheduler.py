@@ -38,12 +38,22 @@ class SyncStatus:
 sync_status = SyncStatus()
 
 
+# In-process cache of parsed sync maps, keyed by path. Each entry stores the
+# file mtime it was parsed from so a regenerated map is reloaded automatically.
+_SYNC_MAP_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+
 def _load_sync_map(path: str) -> list[dict[str, Any]] | None:
     p = Path(path)
     if not p.exists():
         logger.error("Sync map not found: %s", path)
+        _SYNC_MAP_CACHE.pop(path, None)
         return None
     try:
+        mtime = p.stat().st_mtime
+        cached = _SYNC_MAP_CACHE.get(path)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
         entries: list[dict[str, Any]] = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         logger.error("Failed to load sync map %s: %s", path, exc)
@@ -51,6 +61,7 @@ def _load_sync_map(path: str) -> list[dict[str, Any]] | None:
     if not entries:
         logger.warning("Sync map is empty: %s", path)
         return None
+    _SYNC_MAP_CACHE[path] = (mtime, entries)
     return entries
 
 
@@ -154,6 +165,9 @@ async def _write_abs_to_kosync(
         )
         return
     mapping.last_synced_at = datetime.now(UTC)
+    # Write every linked KosyncUser and advance last_synced_at in one transaction,
+    # so a failure mid-loop rolls the whole mapping back instead of leaving
+    # last_synced_at advanced with progress only partially written.
     for ku in mapping.user.kosync_users:
         await write_reading_progress(
             session,
@@ -167,7 +181,9 @@ async def _write_abs_to_kosync(
             authors=mapping.abs_author,
             filename=mapping.ebook_filename,
             updated_at=abs_updated_at,
+            commit=False,
         )
+    await session.commit()
     logger.info("ABS→KOSync %s: %.4f%%", mapping.abs_item_id, new_pct)
 
 
