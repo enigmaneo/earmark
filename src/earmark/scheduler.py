@@ -97,9 +97,7 @@ def _normalize_xpath(xpath: str) -> str:
     return xpath
 
 
-def _kosync_to_audio(
-    xpath: str, sync_map: list[dict[str, Any]]
-) -> float | None:
+def _kosync_to_audio(xpath: str, sync_map: list[dict[str, Any]]) -> float | None:
     frag_match = _DOCFRAG_RE.search(xpath)
     if not frag_match:
         return None
@@ -134,6 +132,16 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
+def _mapping_label(mapping: AbsEbookMapping) -> str:
+    """Identify a mapping in logs by ABS item id, KOSync document id, and title."""
+    parts = [f"abs={mapping.abs_item_id}"]
+    if mapping.kosync_document:
+        parts.append(f"doc={mapping.kosync_document}")
+    if mapping.abs_title:
+        parts.append(f'"{mapping.abs_title}"')
+    return " ".join(parts)
+
+
 async def _write_abs_to_kosync(
     mapping: AbsEbookMapping,
     abs_data: dict[str, Any],
@@ -150,18 +158,20 @@ async def _write_abs_to_kosync(
         # ABS lastUpdate is still advancing → playback is active. Defer the write so we
         # don't add a KOSync entry per sync cycle; a later cycle will write once playback
         # has stopped. Don't touch last_synced_at so the next cycle re-evaluates.
-        logger.debug(
+        logger.info(
             "Deferring ABS→KOSync for %s: idle %.0fs < %ds, still playing",
-            mapping.abs_item_id, idle, idle_threshold,
+            _mapping_label(mapping),
+            idle,
+            idle_threshold,
         )
         return
-    ebook_pos, new_pct = _audio_to_kosync(
-        abs_data["currentTime"], abs_data["duration"], sync_map
-    )
+    ebook_pos, new_pct = _audio_to_kosync(abs_data["currentTime"], abs_data["duration"], sync_map)
     if min_percentage is not None and new_pct <= min_percentage:
         logger.warning(
             "Skipping KOSync update for %s: new %.4f%% <= current %.4f%%",
-            mapping.abs_item_id, new_pct, min_percentage,
+            _mapping_label(mapping),
+            new_pct,
+            min_percentage,
         )
         return
     mapping.last_synced_at = datetime.now(UTC)
@@ -184,7 +194,7 @@ async def _write_abs_to_kosync(
             commit=False,
         )
     await session.commit()
-    logger.info("ABS→KOSync %s: %.4f%%", mapping.abs_item_id, new_pct)
+    logger.info("ABS→KOSync %s: %.4f%%", _mapping_label(mapping), new_pct)
 
 
 async def _write_kosync_to_abs(
@@ -201,14 +211,15 @@ async def _write_kosync_to_abs(
         frag = _DOCFRAG_RE.search(ko_progress.progress)
         logger.warning(
             "Cannot map KOSync XPath to ABS for %s: DocFragment[%s] not in sync map",
-            mapping.abs_item_id, frag.group(1) if frag else "?",
+            _mapping_label(mapping),
+            frag.group(1) if frag else "?",
         )
         return
     if abs_data is not None and audio_time <= abs_data["currentTime"]:
         duration = abs_data["duration"]
         logger.warning(
             "Skipping ABS update for %s: new %.4f%% <= current %.4f%%",
-            mapping.abs_item_id,
+            _mapping_label(mapping),
             audio_time / duration * 100 if duration else 0.0,
             abs_data["currentTime"] / duration * 100 if duration else 0.0,
         )
@@ -225,14 +236,14 @@ async def _write_kosync_to_abs(
         ko_progress.abs_synced_at = None
         ko_progress.abs_sync_error = str(exc)
         await session.commit()
-        logger.error("KOSync→ABS failed for %s: %s", mapping.abs_item_id, exc)
+        logger.error("KOSync→ABS failed for %s: %s", _mapping_label(mapping), exc)
         return
     ko_progress.abs_synced = True
     ko_progress.abs_synced_at = datetime.now(UTC)
     ko_progress.abs_sync_error = None
     mapping.last_synced_at = datetime.now(UTC)
     await session.commit()
-    logger.info("KOSync→ABS %s: %.4f%%", mapping.abs_item_id, ko_progress.percentage)
+    logger.info("KOSync→ABS %s: %.4f%%", _mapping_label(mapping), ko_progress.percentage)
 
 
 async def _sync_mapping(
@@ -244,7 +255,7 @@ async def _sync_mapping(
     abs_item_id = mapping.abs_item_id
 
     if not mapping.kosync_document:
-        logger.warning("Skipping %s: no kosync_document", abs_item_id)
+        logger.warning("Skipping %s: no kosync_document", _mapping_label(mapping))
         return
 
     if not mapping.user or not mapping.user.kosync_users:
@@ -253,7 +264,7 @@ async def _sync_mapping(
 
     job = mapping.alignment_job
     if not job or job.status not in ("complete", "complete_with_warnings") or not job.sync_map_path:
-        logger.warning("Skipping %s: no completed alignment job", abs_item_id)
+        logger.warning("Skipping %s: no completed alignment job", _mapping_label(mapping))
         return
 
     sync_map = await asyncio.to_thread(_load_sync_map, job.sync_map_path)
@@ -263,7 +274,7 @@ async def _sync_mapping(
     try:
         abs_data = await abs_client.get_progress(abs_item_id)
     except Exception as exc:
-        logger.error("Error fetching ABS progress for %s: %s", abs_item_id, exc)
+        logger.error("Error fetching ABS progress for %s: %s", _mapping_label(mapping), exc)
         return
 
     ko_result = await session.execute(
@@ -288,7 +299,13 @@ async def _sync_mapping(
         ko_ts = _ensure_utc(ko_progress.updated_at)
         last = _ensure_utc(mapping.last_synced_at)
         if abs_ts <= last and ko_ts <= last:
-            logger.debug("Skipping %s: no changes since last sync (%s)", abs_item_id, last)
+            logger.info(
+                "Skipping %s: no change (abs=%s ko=%s last_synced=%s)",
+                _mapping_label(mapping),
+                abs_ts,
+                ko_ts,
+                last,
+            )
             return
 
     if ko_progress is None:
@@ -300,10 +317,17 @@ async def _sync_mapping(
         abs_ts = datetime.fromtimestamp(abs_data["lastUpdate"] / 1000, tz=UTC)
         ko_ts = _ensure_utc(ko_progress.updated_at)
         if abs_ts == ko_ts:
+            logger.info("Skipping %s: ABS and KOSync timestamps equal", _mapping_label(mapping))
             return
         if abs_ts > ko_ts:
-            await _write_abs_to_kosync(mapping, abs_data, sync_map, session, idle_threshold,
-                                       min_percentage=ko_progress.percentage)
+            await _write_abs_to_kosync(
+                mapping,
+                abs_data,
+                sync_map,
+                session,
+                idle_threshold,
+                min_percentage=ko_progress.percentage,
+            )
         else:
             await _write_kosync_to_abs(
                 mapping, ko_progress, abs_data, abs_client, sync_map, session
@@ -347,9 +371,7 @@ async def sync_progress() -> None:
                         mapping_result = await session.execute(
                             select(AbsEbookMapping)
                             .options(
-                                selectinload(AbsEbookMapping.user).selectinload(
-                                    User.kosync_users
-                                )
+                                selectinload(AbsEbookMapping.user).selectinload(User.kosync_users)
                             )
                             .where(AbsEbookMapping.id == mapping_id)
                         )
