@@ -124,7 +124,11 @@ async def test_get_progress_not_found(client: AsyncClient, alice: dict[str, str]
 async def test_list_progress(client: AsyncClient, alice: dict[str, str]) -> None:
     await client.put("/syncs/progress", json=PROGRESS_PAYLOAD, headers=alice)
     # A second PUT for the same document creates a new historical entry
-    higher = {**PROGRESS_PAYLOAD, "percentage": 0.5, "progress": "/body/DocFragment[20]/body/div[1]"}
+    higher = {
+        **PROGRESS_PAYLOAD,
+        "percentage": 0.5,
+        "progress": "/body/DocFragment[20]/body/div[1]",
+    }
     await client.put("/syncs/progress", json=higher, headers=alice)
     response = await client.get(f"/syncs/progress?document={DOC}", headers=alice)
     assert response.status_code == 200
@@ -140,7 +144,11 @@ async def test_list_progress(client: AsyncClient, alice: dict[str, str]) -> None
 async def test_list_progress_pagination(client: AsyncClient, alice: dict[str, str]) -> None:
     # Create 5 entries for the same document
     for i in range(5):
-        payload = {**PROGRESS_PAYLOAD, "percentage": i * 0.1, "progress": f"/body/DocFragment[{i+1}]/body/p[1]"}
+        payload = {
+            **PROGRESS_PAYLOAD,
+            "percentage": i * 0.1,
+            "progress": f"/body/DocFragment[{i + 1}]/body/p[1]",
+        }
         await client.put("/syncs/progress", json=payload, headers=alice)
     response = await client.get(f"/syncs/progress?document={DOC}&page=1&per_page=3", headers=alice)
     body = response.json()

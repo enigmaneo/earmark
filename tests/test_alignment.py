@@ -70,7 +70,9 @@ def test_element_full_xpath_mixed_siblings() -> None:
 @pytest.fixture
 async def jwt_headers(client: AsyncClient) -> dict[str, str]:
     await client.post("/auth/register", json={"email": "align@example.com", "password": "secret"})
-    resp = await client.post("/auth/login", json={"email": "align@example.com", "password": "secret"})
+    resp = await client.post(
+        "/auth/login", json={"email": "align@example.com", "password": "secret"}
+    )
     token = resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 

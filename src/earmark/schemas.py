@@ -182,6 +182,26 @@ class SettingUpdate(BaseModel):
     value: str
 
 
+class LogEntry(BaseModel):
+    timestamp: str | None = None
+    level: str | None = None
+    name: str | None = None
+    message: str
+
+
+class LogList(BaseModel):
+    data: list[LogEntry]
+    total: int
+    page: int
+    per_page: int
+
+
+class LogFileInfo(BaseModel):
+    name: str
+    size_bytes: int
+    modified_at: str
+
+
 class MappingRead(BaseModel):
     id: int
     user_id: int

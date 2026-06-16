@@ -35,7 +35,6 @@ PREVIEW_DIR = os.path.join(PREVIEW_DIR, "tmp") if PREVIEW_DIR else None
 def load_rgba_with_transparent_bg(path: str) -> Image.Image:
     """Load the source and knock out the border-connected white background."""
     rgb = np.asarray(Image.open(path).convert("RGB")).astype(np.int16)
-    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
 
     # Near-white: bright in every channel and nearly grey (low saturation).
     maxc = rgb.max(axis=2)

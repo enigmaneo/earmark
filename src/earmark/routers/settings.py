@@ -95,6 +95,13 @@ async def update_setting(
         except Exception:
             logger.warning("Could not reschedule sync job", exc_info=True)
 
+    if key.startswith("log_"):
+        try:
+            from earmark.logging_config import configure_file_logging
+            await configure_file_logging(session)
+        except Exception:
+            logger.warning("Could not reconfigure file logging", exc_info=True)
+
     return build_setting_read(row, defn)
 
 

@@ -54,6 +54,15 @@ class Settings(BaseSettings):
     log_pretty: bool = False
     log_requests: bool = False
 
+    # File logging. Logs are written as JSON lines to log_dir/earmark.log and rotated by
+    # Python's stdlib handlers (no scheduler task). log_dir is env-only; the rest are also
+    # exposed as DB-backed settings so they can be changed at runtime.
+    log_dir: str = "./logs"
+    log_rotation_strategy: str = "size"  # "size" | "time"
+    log_max_size_mb: int = 10  # size strategy: rotate above this many MB
+    log_rotation_when: str = "midnight"  # time strategy: TimedRotatingFileHandler `when`
+    log_backup_count: int = 5  # how many rotated files to keep
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_cors_origins(cls, value: object) -> object:
