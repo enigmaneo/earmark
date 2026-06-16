@@ -96,7 +96,6 @@ def _mapping_to_schema(
 
 def _extract_epub_metadata(path: Path) -> tuple[str | None, str | None]:
     try:
-        import ebooklib
         from ebooklib import epub
 
         book = epub.read_epub(str(path), options={"ignore_ncx": True})
@@ -326,13 +325,15 @@ async def list_mappings(
             .where(
                 KosyncUser.user_id == user.id,
                 ReadingProgress.document.in_(kosync_docs),
-                ReadingProgress.is_latest == True,
+                ReadingProgress.is_latest.is_(True),
             )
         )
         progress_by_doc = {r.document: r.percentage for r in progress_result.scalars().all()}
 
     return [
-        _mapping_to_schema(m, lib_by_id.get(m.abs_item_id), progress_by_doc.get(m.kosync_document or ""))
+        _mapping_to_schema(
+            m, lib_by_id.get(m.abs_item_id), progress_by_doc.get(m.kosync_document or "")
+        )
         for m in mappings
     ]
 

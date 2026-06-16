@@ -89,3 +89,23 @@ export interface AppSetting {
 	has_db_value: boolean;
 	display_value: string;
 }
+
+export interface LogEntry {
+	timestamp: string | null;
+	level: string | null;
+	name: string | null;
+	message: string;
+}
+
+export interface LogList {
+	data: LogEntry[];
+	total: number;
+	page: number;
+	per_page: number;
+}
+
+export interface LogFileInfo {
+	name: string;
+	size_bytes: number;
+	modified_at: string;
+}

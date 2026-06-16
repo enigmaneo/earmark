@@ -78,6 +78,38 @@ SETTING_DEFINITIONS: list[dict[str, Any]] = [
         "is_secret": False,
         "env_default_fn": lambda: str(settings.sync_abs_idle_seconds),
     },
+    {
+        "key": "log_rotation_strategy",
+        "label": "Log Rotation Strategy",
+        "description": "How log files rotate: 'size' (by file size) or 'time' (on a schedule)",
+        "value_type": "string",
+        "is_secret": False,
+        "env_default_fn": lambda: settings.log_rotation_strategy,
+    },
+    {
+        "key": "log_max_size_mb",
+        "label": "Log Max Size (MB)",
+        "description": "Size strategy: rotate the log file once it exceeds this many megabytes",
+        "value_type": "int",
+        "is_secret": False,
+        "env_default_fn": lambda: str(settings.log_max_size_mb),
+    },
+    {
+        "key": "log_rotation_when",
+        "label": "Log Rotation Interval",
+        "description": "Time strategy: when to rotate, e.g. 'midnight', 'H' (hourly), 'D' (daily)",
+        "value_type": "string",
+        "is_secret": False,
+        "env_default_fn": lambda: settings.log_rotation_when,
+    },
+    {
+        "key": "log_backup_count",
+        "label": "Log Files To Keep",
+        "description": "How many rotated log files to keep before deleting the oldest",
+        "value_type": "int",
+        "is_secret": False,
+        "env_default_fn": lambda: str(settings.log_backup_count),
+    },
 ]
 
 _DEFINITIONS_BY_KEY: dict[str, dict[str, Any]] = {d["key"]: d for d in SETTING_DEFINITIONS}

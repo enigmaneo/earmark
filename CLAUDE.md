@@ -27,6 +27,7 @@ Project documentation lives in `docs/`:
 - [`docs/AlignmentTesting.md`](docs/AlignmentTesting.md) — Alignment pipeline testing guide
 - [`docs/Sync.md`](docs/Sync.md) — Bidirectional ABS ↔ KOSync progress sync
 - [`docs/Settings.md`](docs/Settings.md) — DB-backed settings system, override precedence, secret encryption
+- [`docs/LogsTab.md`](docs/LogsTab.md) — File-based logging, rotation, log API, and the Logs UI tab
 
 ## Rules
 

@@ -194,7 +194,9 @@ async def web_list_progress(
     user: User = Depends(get_current_earmark_user),
     session: AsyncSession = Depends(get_session),
     document: str | None = Query(default=None),
-    sort_by: Literal["title", "percentage", "progress", "device", "is_latest", "updated_at"] = Query(default="updated_at"),
+    sort_by: Literal[
+        "title", "percentage", "progress", "device", "is_latest", "updated_at"
+    ] = Query(default="updated_at"),
     sort_dir: Literal["asc", "desc"] = Query(default="desc"),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=1, le=100),

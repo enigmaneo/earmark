@@ -24,10 +24,10 @@ DOCUMENT = "aabbccdd" * 4  # 32-char fake MD5
 ABS_ITEM_ID = "li_test001"
 
 SYNC_MAP = [
-    {"id": "p0", "audio_start": 0.0, "audio_end": 100.0, "ebook_pos": "/body/DocFragment[1]/body/section[1]/p[1]", "text_snippet": "A"},
-    {"id": "p1", "audio_start": 100.0, "audio_end": 200.0, "ebook_pos": "/body/DocFragment[2]/body/section[1]/p[1]", "text_snippet": "B"},
-    {"id": "p2", "audio_start": 200.0, "audio_end": 300.0, "ebook_pos": "/body/DocFragment[3]/body/section[1]/p[2]", "text_snippet": "C"},
-    {"id": "p3", "audio_start": 300.0, "audio_end": 400.0, "ebook_pos": "/body/DocFragment[3]/body/section[1]/p[4]", "text_snippet": "D"},
+    {"id": "p0", "audio_start": 0.0, "audio_end": 100.0, "ebook_pos": "/body/DocFragment[1]/body/section[1]/p[1]", "text_snippet": "A"},  # noqa: E501
+    {"id": "p1", "audio_start": 100.0, "audio_end": 200.0, "ebook_pos": "/body/DocFragment[2]/body/section[1]/p[1]", "text_snippet": "B"},  # noqa: E501
+    {"id": "p2", "audio_start": 200.0, "audio_end": 300.0, "ebook_pos": "/body/DocFragment[3]/body/section[1]/p[2]", "text_snippet": "C"},  # noqa: E501
+    {"id": "p3", "audio_start": 300.0, "audio_end": 400.0, "ebook_pos": "/body/DocFragment[3]/body/section[1]/p[4]", "text_snippet": "D"},  # noqa: E501
 ]
 
 DURATION = 400.0
@@ -47,7 +47,9 @@ def _stopped_ms() -> int:
 # ---------------------------------------------------------------------------
 
 
-async def test_write_reading_progress_creates_record(db_session_factory: async_sessionmaker) -> None:
+async def test_write_reading_progress_creates_record(
+    db_session_factory: async_sessionmaker,
+) -> None:
     async with db_session_factory() as session:
         ku = KosyncUser(username="bob", password_hash="x")
         session.add(ku)
@@ -69,7 +71,9 @@ async def test_write_reading_progress_creates_record(db_session_factory: async_s
     assert record.percentage == pytest.approx(0.1)
 
 
-async def test_write_reading_progress_demotes_previous(db_session_factory: async_sessionmaker) -> None:
+async def test_write_reading_progress_demotes_previous(
+    db_session_factory: async_sessionmaker,
+) -> None:
     async with db_session_factory() as session:
         ku = KosyncUser(username="bob", password_hash="x")
         session.add(ku)
@@ -241,7 +245,9 @@ def test_load_sync_map_empty_list(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_abs_client(progress_data: dict | None = None, update_raises: Exception | None = None) -> MagicMock:
+def _make_abs_client(
+    progress_data: dict | None = None, update_raises: Exception | None = None
+) -> MagicMock:
     client = MagicMock()
     client.get_progress = AsyncMock(return_value=progress_data)
     if update_raises:

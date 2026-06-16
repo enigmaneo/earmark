@@ -562,7 +562,10 @@ async def seed() -> None:
                         kosync_document=m.get("kosync_document"),
                     )
                 )
-                print(f"  Created mapping: {m['abs_title']} → {m['ebook_filename']} ({m['earmark_email']})")
+                print(
+                    f"  Created mapping: {m['abs_title']} → "
+                    f"{m['ebook_filename']} ({m['earmark_email']})"
+                )
             else:
                 print(f"  Skipped existing mapping: {m['abs_title']} ({m['earmark_email']})")
 

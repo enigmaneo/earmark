@@ -78,7 +78,9 @@ async def test_web_documents_isolation(
     bob_kosync: dict[str, str],
 ) -> None:
     await client.put("/syncs/progress", json=PROGRESS_PAYLOAD, headers=alice_kosync)
-    await client.put("/syncs/progress", json={**PROGRESS_PAYLOAD, "document": DOC2}, headers=bob_kosync)
+    await client.put(
+        "/syncs/progress", json={**PROGRESS_PAYLOAD, "document": DOC2}, headers=bob_kosync
+    )
 
     alice_res = await client.get("/web/documents", headers={"Authorization": f"Bearer {alice_jwt}"})
     assert len(alice_res.json()) == 1
@@ -107,7 +109,9 @@ async def test_web_progress_lists_all(
     client: AsyncClient, alice_jwt: str, alice_kosync: dict[str, str]
 ) -> None:
     await client.put("/syncs/progress", json=PROGRESS_PAYLOAD, headers=alice_kosync)
-    await client.put("/syncs/progress", json={**PROGRESS_PAYLOAD, "document": DOC2}, headers=alice_kosync)
+    await client.put(
+        "/syncs/progress", json={**PROGRESS_PAYLOAD, "document": DOC2}, headers=alice_kosync
+    )
     res = await client.get("/web/progress", headers={"Authorization": f"Bearer {alice_jwt}"})
     assert res.json()["total"] == 2
 
@@ -116,7 +120,9 @@ async def test_web_progress_filter_by_document(
     client: AsyncClient, alice_jwt: str, alice_kosync: dict[str, str]
 ) -> None:
     await client.put("/syncs/progress", json=PROGRESS_PAYLOAD, headers=alice_kosync)
-    await client.put("/syncs/progress", json={**PROGRESS_PAYLOAD, "document": DOC2}, headers=alice_kosync)
+    await client.put(
+        "/syncs/progress", json={**PROGRESS_PAYLOAD, "document": DOC2}, headers=alice_kosync
+    )
     res = await client.get(
         f"/web/progress?document={DOC}", headers={"Authorization": f"Bearer {alice_jwt}"}
     )
@@ -128,8 +134,16 @@ async def test_web_progress_filter_by_document(
 async def test_web_progress_sort_ascending(
     client: AsyncClient, alice_jwt: str, alice_kosync: dict[str, str]
 ) -> None:
-    await client.put("/syncs/progress", json={**PROGRESS_PAYLOAD, "percentage": 0.1, "progress": "/body/DocFragment[1]/body/p[1]"}, headers=alice_kosync)
-    await client.put("/syncs/progress", json={**PROGRESS_PAYLOAD, "percentage": 0.9, "progress": "/body/DocFragment[2]/body/p[1]"}, headers=alice_kosync)
+    await client.put(
+        "/syncs/progress",
+        json={**PROGRESS_PAYLOAD, "percentage": 0.1, "progress": "/body/DocFragment[1]/body/p[1]"},
+        headers=alice_kosync,
+    )
+    await client.put(
+        "/syncs/progress",
+        json={**PROGRESS_PAYLOAD, "percentage": 0.9, "progress": "/body/DocFragment[2]/body/p[1]"},
+        headers=alice_kosync,
+    )
     res = await client.get(
         "/web/progress?sort_by=percentage&sort_dir=asc",
         headers={"Authorization": f"Bearer {alice_jwt}"},
@@ -176,7 +190,9 @@ async def test_web_delete_record(
 
 
 async def test_web_delete_record_not_found(client: AsyncClient, alice_jwt: str) -> None:
-    res = await client.delete("/web/records/99999", headers={"Authorization": f"Bearer {alice_jwt}"})
+    res = await client.delete(
+        "/web/records/99999", headers={"Authorization": f"Bearer {alice_jwt}"}
+    )
     assert res.status_code == 404
 
 
