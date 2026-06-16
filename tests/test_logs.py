@@ -143,3 +143,39 @@ async def test_log_files_lists_rotated(
     res = await client.get("/web/logs/files", headers=auth)
     names = {f["name"] for f in res.json()}
     assert names == {"earmark.log", "earmark.log.1"}
+
+
+async def test_logs_rejects_invalid_level(
+    client: AsyncClient, auth: dict[str, str], sample_log: Path
+) -> None:
+    res = await client.get("/web/logs?level=WARN", headers=auth)
+    assert res.status_code == 400
+
+
+# --- file handler formatting ---
+
+
+def test_file_handler_emits_utc_timestamp(log_dir: Path) -> None:
+    """asctime must be rendered in UTC, matching the literal 'Z' in the timestamp."""
+    import logging
+    from datetime import UTC, datetime
+
+    from earmark.logging_config import _build_file_handler, log_file_path
+
+    handler = _build_file_handler("size", 10, "midnight", 5)
+    record = logging.LogRecord(
+        name="earmark.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="hello",
+        args=(),
+        exc_info=None,
+    )
+    # Pin record.created to a known UTC instant so we can assert the rendered value.
+    record.created = datetime(2026, 6, 14, 12, 0, 0, tzinfo=UTC).timestamp()
+    handler.emit(record)
+    handler.close()
+
+    entry = json.loads(log_file_path().read_text(encoding="utf-8").splitlines()[-1])
+    assert entry["timestamp"] == "2026-06-14T12:00:00Z"

@@ -8,6 +8,7 @@ changes. Rotation is handled by Python's stdlib handlers — there is no separat
 
 import logging
 import logging.handlers
+import time
 from pathlib import Path
 
 from pythonjsonlogger.json import JsonFormatter
@@ -65,13 +66,14 @@ def _build_file_handler(
             encoding="utf-8",
         )
     handler.set_name(_FILE_HANDLER_NAME)
-    handler.setFormatter(
-        JsonFormatter(
-            "%(asctime)s %(levelname)s %(name)s %(message)s",
-            rename_fields={"asctime": "timestamp", "levelname": "level"},
-            datefmt="%Y-%m-%dT%H:%M:%SZ",
-        )
+    formatter = JsonFormatter(
+        "%(asctime)s %(levelname)s %(name)s %(message)s",
+        rename_fields={"asctime": "timestamp", "levelname": "level"},
+        datefmt="%Y-%m-%dT%H:%M:%SZ",
     )
+    # The literal Z above claims UTC, so render asctime in UTC (default is localtime).
+    formatter.converter = time.gmtime
+    handler.setFormatter(formatter)
     return handler
 
 

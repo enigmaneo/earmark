@@ -82,7 +82,11 @@ async def list_logs(
     if not path.exists():
         return LogList(data=[], total=0, page=page, per_page=per_page)
 
-    min_level = _LEVELS.get(level.upper()) if level else None
+    min_level: int | None = None
+    if level:
+        min_level = _LEVELS.get(level.upper())
+        if min_level is None:
+            raise HTTPException(status_code=400, detail="Invalid level")
     needle = q.lower() if q else None
     from_dt = _parse_iso(from_) if from_ else None
     to_dt = _parse_iso(to) if to else None
