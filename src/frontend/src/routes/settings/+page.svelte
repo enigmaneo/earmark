@@ -45,7 +45,7 @@
 		},
 		{
 			title: 'Application',
-			keys: ['timezone', 'sync_interval_seconds', 'sync_abs_idle_seconds'],
+			keys: ['timezone', 'sync_interval_seconds', 'sync_abs_idle_seconds', 'sync_min_movement'],
 		},
 	];
 
@@ -136,6 +136,17 @@
 										type="number"
 										min="1"
 										step="1"
+										name="value"
+										value={setting.display_value}
+										class="input flex-1"
+									/>
+								{:else if setting.value_type === 'float'}
+									<input
+										id="input-{setting.key}"
+										type="number"
+										min="0"
+										max="1"
+										step="0.001"
 										name="value"
 										value={setting.display_value}
 										class="input flex-1"

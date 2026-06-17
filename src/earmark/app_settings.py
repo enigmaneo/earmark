@@ -79,6 +79,17 @@ SETTING_DEFINITIONS: list[dict[str, Any]] = [
         "env_default_fn": lambda: str(settings.sync_abs_idle_seconds),
     },
     {
+        "key": "sync_min_movement",
+        "label": "Minimum Progress Movement",
+        "description": (
+            "Smallest change in reading fraction (0.0–1.0) before a KOSync push is "
+            "stored; smaller moves are ignored. 0 disables."
+        ),
+        "value_type": "float",
+        "is_secret": False,
+        "env_default_fn": lambda: str(settings.sync_min_movement),
+    },
+    {
         "key": "log_rotation_strategy",
         "label": "Log Rotation Strategy",
         "description": "How log files rotate: 'size' (by file size) or 'time' (on a schedule)",
@@ -175,6 +186,14 @@ async def get_effective_int(key: str, default: int, session: AsyncSession) -> in
     raw = await get_effective_str(key, str(default), session)
     try:
         return int(raw)
+    except (ValueError, TypeError):
+        return default
+
+
+async def get_effective_float(key: str, default: float, session: AsyncSession) -> float:
+    raw = await get_effective_str(key, str(default), session)
+    try:
+        return float(raw)
     except (ValueError, TypeError):
         return default
 

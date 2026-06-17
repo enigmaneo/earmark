@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # audiobook is actively playing, lastUpdate keeps advancing; deferring until it has
     # been idle this long collapses a listening session into a single KOSync entry.
     sync_abs_idle_seconds: int = 360
+    # Minimum forward/backward change in reading fraction (0.0–1.0) before an inbound
+    # KOSync push is stored. Smaller moves are ignored to keep chatty clients (e.g.
+    # Readest) from bloating reading_progress. 0 disables the guard.
+    sync_min_movement: float = 0.004
 
     cwa_url: str = ""
     cwa_username: str = ""

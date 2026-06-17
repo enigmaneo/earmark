@@ -58,6 +58,89 @@ async def test_put_progress_same_xpath_lower_percentage_is_noop(
     assert list_response.json()["total"] == 1
 
 
+async def test_put_progress_sub_threshold_move_ignored(
+    client: AsyncClient, alice: dict[str, str]
+) -> None:
+    # Default sync_min_movement is 0.005; a smaller advance is dropped (chatty client).
+    await client.put("/syncs/progress", json=PROGRESS_PAYLOAD, headers=alice)
+    tiny = {**PROGRESS_PAYLOAD, "percentage": 0.2090, "progress": "/body/div[2]"}
+    response = await client.put("/syncs/progress", json=tiny, headers=alice)
+    assert response.status_code == 200
+    # The stored latest is unchanged and no new row was written.
+    assert response.json()["percentage"] == pytest.approx(0.2082)
+    assert response.json()["progress"] == PROGRESS_PAYLOAD["progress"]
+    list_response = await client.get(f"/syncs/progress?document={DOC}", headers=alice)
+    assert list_response.json()["total"] == 1
+
+
+async def test_put_progress_above_threshold_move_stored(
+    client: AsyncClient, alice: dict[str, str]
+) -> None:
+    await client.put("/syncs/progress", json=PROGRESS_PAYLOAD, headers=alice)
+    bigger = {**PROGRESS_PAYLOAD, "percentage": 0.22, "progress": "/body/div[2]"}
+    response = await client.put("/syncs/progress", json=bigger, headers=alice)
+    assert response.status_code == 200
+    assert response.json()["percentage"] == pytest.approx(0.22)
+    list_response = await client.get(f"/syncs/progress?document={DOC}", headers=alice)
+    assert list_response.json()["total"] == 2
+
+
+async def test_write_reading_progress_min_movement_disabled_stores_every_push(
+    db_session_factory: async_sessionmaker,  # type: ignore[type-arg]
+) -> None:
+    from sqlalchemy import func, select
+
+    from earmark.models import KosyncUser, ReadingProgress
+    from earmark.services.progress import write_reading_progress
+
+    async with db_session_factory() as session:
+        ku = KosyncUser(username="bob", password_hash="x")
+        session.add(ku)
+        await session.flush()
+
+        # min_movement=None: every distinct XPath is stored, even tiny moves.
+        await write_reading_progress(
+            session,
+            kosync_user_id=ku.id,
+            document=DOC,
+            progress="/body/p[1]",
+            percentage=0.2000,
+            device="d",
+            device_id="i",
+            min_movement=None,
+        )
+        await write_reading_progress(
+            session,
+            kosync_user_id=ku.id,
+            document=DOC,
+            progress="/body/p[2]",
+            percentage=0.2001,
+            device="d",
+            device_id="i",
+            min_movement=None,
+        )
+        total = await session.scalar(
+            select(func.count()).select_from(ReadingProgress).where(ReadingProgress.document == DOC)
+        )
+        assert total == 2
+
+        # min_movement set: the same tiny move is ignored.
+        await write_reading_progress(
+            session,
+            kosync_user_id=ku.id,
+            document=DOC,
+            progress="/body/p[3]",
+            percentage=0.2002,
+            device="d",
+            device_id="i",
+            min_movement=0.01,
+        )
+        total = await session.scalar(
+            select(func.count()).select_from(ReadingProgress).where(ReadingProgress.document == DOC)
+        )
+        assert total == 2
+
+
 async def test_put_progress_with_duplicate_mapping_documents(
     client: AsyncClient,
     alice: dict[str, str],

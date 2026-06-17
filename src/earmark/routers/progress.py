@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from earmark.app_settings import get_effective_str
+from earmark.app_settings import get_effective_float, get_effective_str
 from earmark.auth import get_current_user
 from earmark.config import settings
 from earmark.database import get_session
@@ -61,6 +61,9 @@ async def upsert_progress(
     user: KosyncUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> ProgressResponse:
+    min_movement = await get_effective_float(
+        "sync_min_movement", settings.sync_min_movement, session
+    )
     record = await write_reading_progress(
         session,
         kosync_user_id=user.id,
@@ -72,6 +75,7 @@ async def upsert_progress(
         filename=body.metadata.filename if body.metadata else None,
         title=body.metadata.title if body.metadata else None,
         authors=body.metadata.authors if body.metadata else None,
+        min_movement=min_movement,
     )
     return _to_response(record)
 

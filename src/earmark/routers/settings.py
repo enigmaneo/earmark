@@ -65,6 +65,13 @@ async def update_setting(
             raise HTTPException(status_code=422, detail=f"{key} requires an integer value")
         if parsed < 1:
             raise HTTPException(status_code=422, detail=f"{key} must be a positive integer")
+    elif defn["value_type"] == "float":
+        try:
+            parsed_float = float(body.value)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"{key} requires a numeric value")
+        if parsed_float < 0 or parsed_float > 1:
+            raise HTTPException(status_code=422, detail=f"{key} must be between 0 and 1")
     elif defn["value_type"] == "timezone":
         if body.value not in available_timezones():
             raise HTTPException(
@@ -90,6 +97,7 @@ async def update_setting(
     if key == "sync_interval_seconds":
         try:
             from earmark.scheduler import reschedule_sync_job
+
             reschedule_sync_job(int(body.value))
             logger.info("Rescheduled sync job to %s seconds", body.value)
         except Exception:
@@ -98,6 +106,7 @@ async def update_setting(
     if key.startswith("log_"):
         try:
             from earmark.logging_config import configure_file_logging
+
             await configure_file_logging(session)
         except Exception:
             logger.warning("Could not reconfigure file logging", exc_info=True)

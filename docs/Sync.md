@@ -269,6 +269,8 @@ async def write_reading_progress(
 
 `routers/progress.py:upsert_progress` is refactored to call `write_reading_progress` instead of containing the upsert inline. The sync job calls the same function.
 
+**Chatty-client de-bloat:** inbound KOSync pushes (`PUT /syncs/progress`) pass `min_movement = sync_min_movement` (a reading fraction, default `0.005`). A push whose percentage differs from the stored latest by less than this is ignored — no new row — so aggressive clients (e.g. Readest) don't bloat `reading_progress`. Each stored record is the new baseline, so a run of small moves still persists once cumulative drift crosses the threshold; `0` disables the guard. The guard applies only to client pushes — the sync job's ABS → KOSync writes pass no `min_movement`, since its audio-time fraction is not comparable to a client's page fraction.
+
 **Device identity:** all sync-job writes use `device = "earmark-sync"` and `device_id = "earmark-sync"`. This identifies the sync job as its own virtual device in the KOSync history, separate from KOReader devices.
 
 **Which KosyncUsers:** when syncing ABS → KOSync, write to **all** `KosyncUser` records owned by the earmark `User` (i.e., `KosyncUser.user_id == mapping.user_id`). This ensures all KOReader devices pick up the updated position on their next sync.

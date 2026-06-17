@@ -1,9 +1,12 @@
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from earmark.models import AbsEbookMapping, KosyncUser, ReadingProgress
+
+logger = logging.getLogger(__name__)
 
 
 async def get_mapping_for_document(
@@ -87,6 +90,7 @@ async def write_reading_progress(
     filename: str | None = None,
     updated_at: datetime | None = None,
     commit: bool = True,
+    min_movement: float | None = None,
 ) -> ReadingProgress:
     existing_latest = (
         await session.execute(
@@ -99,6 +103,20 @@ async def write_reading_progress(
     ).scalar_one_or_none()
 
     if existing_latest is not None and existing_latest.progress == progress:
+        return existing_latest
+
+    if (
+        min_movement
+        and existing_latest is not None
+        and abs(percentage - existing_latest.percentage) < min_movement
+    ):
+        logger.debug(
+            "Ignoring sub-threshold progress for %s (device=%s): Δ%.4f < %.4f",
+            document,
+            device,
+            abs(percentage - existing_latest.percentage),
+            min_movement,
+        )
         return existing_latest
 
     mapping = await get_mapping_for_document(session, document)
