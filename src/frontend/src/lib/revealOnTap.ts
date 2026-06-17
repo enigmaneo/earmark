@@ -46,7 +46,6 @@ function show(text: string, x: number, y: number) {
 	const onKey = (e: KeyboardEvent) => {
 		if (e.key === 'Escape') dismiss();
 	};
-	const timer = window.setTimeout(dismiss, 4000);
 	// Attach next tick so the creating tap doesn't immediately dismiss it.
 	const arm = window.setTimeout(() => {
 		window.addEventListener('pointerdown', dismiss, { once: true });
@@ -58,7 +57,6 @@ function show(text: string, x: number, y: number) {
 	activeTip = {
 		el,
 		cleanup() {
-			window.clearTimeout(timer);
 			window.clearTimeout(arm);
 			window.removeEventListener('pointerdown', dismiss);
 			window.removeEventListener('scroll', dismiss, { capture: true });
