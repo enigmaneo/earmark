@@ -2,6 +2,7 @@ import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from earmark.database import get_session
@@ -63,7 +64,16 @@ async def register(
             )
         )
 
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # A concurrent registration claimed the same email or KOSync username between
+        # our pre-checks and this commit; surface a conflict instead of a 500.
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email or KOSync username already taken",
+        ) from None
     await session.refresh(user)
     return user
 

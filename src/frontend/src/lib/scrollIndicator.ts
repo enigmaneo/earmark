@@ -46,10 +46,15 @@ export function scrollIndicator(node: HTMLElement) {
 	update();
 	const ro = new ResizeObserver(update);
 	ro.observe(node);
+	// The element's box stays a fixed max-width while only its text changes, so the
+	// ResizeObserver won't fire on content updates — watch the text directly too.
+	const mo = new MutationObserver(update);
+	mo.observe(node, { childList: true, characterData: true, subtree: true });
 
 	return {
 		destroy: () => {
 			ro.disconnect();
+			mo.disconnect();
 			node.removeEventListener('scroll', update);
 			before?.remove();
 			after?.remove();

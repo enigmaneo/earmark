@@ -136,7 +136,7 @@
 						<td class="max-w-xs truncate" title={item.title} use:revealOnTap={item.title}>{item.title}</td>
 						<td class="hidden lg:table-cell max-w-xs truncate font-mono text-xs text-surface-500" title={item.document} use:revealOnTap={item.document}>{item.document}</td>
 						<td>{formatPercent(item.percentage)}</td>
-						<td class="hidden lg:table-cell font-mono text-xs progress-scroll-cell" style="display: flex; align-items: center; gap: 2px;"><div class="progress-scroll" use:scrollIndicator use:revealOnTap={item.progress}>{item.progress}</div></td>
+						<td class="hidden lg:table-cell font-mono text-xs"><div class="progress-scroll-cell"><div class="progress-scroll" use:scrollIndicator use:revealOnTap={item.progress}>{item.progress}</div></div></td>
 						<td class="hidden lg:table-cell truncate" title={item.device} use:revealOnTap={item.device}>{item.device}</td>
 						<td class="hidden lg:table-cell">{item.is_latest ? '✓' : ''}</td>
 						<td class="truncate" title={formatDate(item.timestamp)} use:revealOnTap={formatDate(item.timestamp)}>{formatDate(item.timestamp)}</td>
@@ -241,6 +241,11 @@
 </Modal>
 
 <style>
+	.progress-scroll-cell {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+	}
 	.progress-scroll {
 		overflow-x: scroll;
 		max-width: 18rem;
