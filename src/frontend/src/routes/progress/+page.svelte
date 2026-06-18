@@ -21,8 +21,23 @@
 	let sortBy = $state<SortBy>('updated_at');
 	let sortDir = $state<SortDir>('desc');
 
-	let pendingDelete = $state<ProgressItem | null>(null);
+	let pendingDeleteIds = $state<number[]>([]);
 	let deleteError = $state<string | null>(null);
+
+	let selectedIds = $state<number[]>([]);
+
+	let allSelected = $derived(items.length > 0 && items.every((i) => selectedIds.includes(i.id)));
+	let someSelected = $derived(selectedIds.length > 0 && !allSelected);
+
+	function toggleRow(id: number) {
+		selectedIds = selectedIds.includes(id)
+			? selectedIds.filter((x) => x !== id)
+			: [...selectedIds, id];
+	}
+
+	function toggleAll() {
+		selectedIds = allSelected ? [] : items.map((i) => i.id);
+	}
 
 	const columns: { key: SortBy | null; label: string; thClass: string }[] = [
 		{ key: 'title',      label: 'Title',      thClass: 'w-[40%] lg:w-[18%]' },
@@ -80,6 +95,7 @@
 		selectedDocument = data.document ?? '';
 		sortBy = data.sort_by as SortBy;
 		sortDir = data.sort_dir as SortDir;
+		selectedIds = [];
 	});
 </script>
 
@@ -87,25 +103,38 @@
 	{#if data.loadError}
 		<aside class="alert preset-filled-error-500"><p>{data.loadError}</p></aside>
 	{/if}
-	<div class="flex items-center gap-4">
-		<label for="doc-select" class="text-sm font-medium">Filter by title</label>
-		<select
-			id="doc-select"
-			class="select w-72"
-			bind:value={selectedDocument}
-			onchange={handleDocumentChange}
-		>
-			<option value="">All documents</option>
-			{#each data.documents as doc}
-				<option value={doc.document}>{doc.title ?? doc.document}</option>
-			{/each}
-		</select>
+	<div class="flex flex-col gap-4 sm:flex-row sm:items-center">
+		<div class="flex items-center gap-2">
+			<label for="doc-select" class="text-sm font-medium shrink-0">Filter by title</label>
+			<select
+				id="doc-select"
+				class="select w-full sm:w-72"
+				bind:value={selectedDocument}
+				onchange={handleDocumentChange}
+			>
+				<option value="">All documents</option>
+				{#each data.documents as doc}
+					<option value={doc.document}>{doc.title ?? doc.document}</option>
+				{/each}
+			</select>
+		</div>
 		<span class="text-surface-500 text-sm">{total} entries</span>
+		{#if selectedIds.length > 0}
+			<div class="flex items-center gap-3">
+				<span class="text-surface-500 text-sm">{selectedIds.length} selected</span>
+				<button
+					class="btn btn-sm preset-filled-error-500"
+					onclick={() => { pendingDeleteIds = selectedIds; deleteError = null; }}
+				>
+					Delete selected
+				</button>
+			</div>
+		{/if}
 		{#if data.mappedAbsItemId}
 			<img
 				src="/mappings/cover?abs_item_id={encodeURIComponent(data.mappedAbsItemId)}"
 				alt="Audiobook cover"
-				class="ml-auto h-16 w-auto rounded shadow"
+				class="h-16 w-auto rounded shadow sm:ml-auto"
 			/>
 		{/if}
 	</div>
@@ -114,6 +143,16 @@
 		<table class="table table-hover" style="table-layout: fixed; width: 100%;">
 			<thead>
 				<tr>
+					<th class="w-10">
+						<input
+							type="checkbox"
+							class="checkbox"
+							checked={allSelected}
+							indeterminate={someSelected}
+							onchange={toggleAll}
+							aria-label="Select all on this page"
+						/>
+					</th>
 					{#each columns as col}
 						<th
 							class="{col.thClass} {col.key ? 'cursor-pointer select-none' : ''} overflow-hidden"
@@ -133,6 +172,15 @@
 			<tbody>
 				{#each items as item (item.id)}
 					<tr>
+						<td>
+							<input
+								type="checkbox"
+								class="checkbox"
+								checked={selectedIds.includes(item.id)}
+								onchange={() => toggleRow(item.id)}
+								aria-label="Select entry"
+							/>
+						</td>
 						<td class="max-w-xs truncate" title={item.title} use:revealOnTap={item.title}>{item.title}</td>
 						<td class="hidden lg:table-cell max-w-xs truncate font-mono text-xs text-surface-500" title={item.document} use:revealOnTap={item.document}>{item.document}</td>
 						<td>{formatPercent(item.percentage)}</td>
@@ -162,7 +210,7 @@
 						<td>
 							<button
 								class="btn btn-sm preset-outlined-error-500"
-								onclick={() => { pendingDelete = item; deleteError = null; }}
+								onclick={() => { pendingDeleteIds = [item.id]; deleteError = null; }}
 							>
 								Delete
 							</button>
@@ -170,7 +218,7 @@
 					</tr>
 				{:else}
 					<tr>
-						<td colspan="9" class="text-center text-surface-500">No progress entries.</td>
+						<td colspan="10" class="text-center text-surface-500">No progress entries.</td>
 					</tr>
 				{/each}
 			</tbody>
@@ -199,13 +247,17 @@
 </div>
 
 <Modal
-	open={pendingDelete !== null}
-	onclose={() => { pendingDelete = null; deleteError = null; }}
+	open={pendingDeleteIds.length > 0}
+	onclose={() => { pendingDeleteIds = []; deleteError = null; }}
 	labelledby="delete-title"
 >
-	<h3 class="h3" id="delete-title">Delete entry?</h3>
+	<h3 class="h3" id="delete-title">
+		{pendingDeleteIds.length > 1 ? `Delete ${pendingDeleteIds.length} entries?` : 'Delete entry?'}
+	</h3>
 	<p class="text-surface-600-400">
-		This will permanently remove this progress entry. It cannot be undone.
+		{pendingDeleteIds.length > 1
+			? 'This will permanently remove these progress entries. It cannot be undone.'
+			: 'This will permanently remove this progress entry. It cannot be undone.'}
 	</p>
 	{#if deleteError}
 		<p class="text-error-500 text-sm">{deleteError}</p>
@@ -214,17 +266,18 @@
 		<button
 			type="button"
 			class="btn preset-tonal"
-			onclick={() => { pendingDelete = null; deleteError = null; }}
+			onclick={() => { pendingDeleteIds = []; deleteError = null; }}
 		>
 			Cancel
 		</button>
 		<form
 			method="POST"
-			action="?/deleteRecord"
+			action="?/deleteRecords"
 			use:enhance={() => {
 				return async ({ result, update }) => {
 					if (result.type === 'success' && result.data?.deleted) {
-						pendingDelete = null;
+						pendingDeleteIds = [];
+						selectedIds = [];
 						deleteError = null;
 						await update();
 					} else {
@@ -234,7 +287,7 @@
 				};
 			}}
 		>
-			<input type="hidden" name="id" value={pendingDelete?.id} />
+			<input type="hidden" name="ids" value={JSON.stringify(pendingDeleteIds)} />
 			<button type="submit" class="btn preset-filled-error-500">Delete</button>
 		</form>
 	</div>

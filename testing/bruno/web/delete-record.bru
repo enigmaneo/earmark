@@ -1,12 +1,12 @@
 meta {
-  name: Delete Record
+  name: Delete Records
   type: http
   seq: 3
 }
 
-delete {
-  url: {{base_url}}/web/records/:id
-  body: none
+post {
+  url: {{base_url}}/web/records/delete
+  body: json
   auth: bearer
 }
 
@@ -14,6 +14,8 @@ auth:bearer {
   token: {{jwt_token}}
 }
 
-params:path {
-  id: 1
+body:json {
+  {
+    "ids": [1, 2]
+  }
 }

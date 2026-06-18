@@ -17,6 +17,7 @@ from earmark.schemas import (
     ProgressListItem,
     ProgressResponse,
     ProgressUpsert,
+    RecordDelete,
 )
 from earmark.services.progress import write_reading_progress
 
@@ -238,29 +239,31 @@ async def web_list_progress(
     )
 
 
-@web_router.delete("/records/{record_id}")
-async def web_delete_record(
-    record_id: int,
+@web_router.post("/records/delete")
+async def web_delete_records(
+    body: RecordDelete,
     user: User = Depends(get_current_earmark_user),
     session: AsyncSession = Depends(get_session),
-) -> dict[str, int]:
+) -> dict[str, list[int]]:
+    if not body.ids:
+        return {"deleted": []}
+
     result = await session.execute(
         select(ReadingProgress)
         .join(KosyncUser, ReadingProgress.kosync_user_id == KosyncUser.id)
-        .where(ReadingProgress.id == record_id, KosyncUser.user_id == user.id)
+        .where(ReadingProgress.id.in_(body.ids), KosyncUser.user_id == user.id)
     )
-    record = result.scalar_one_or_none()
-    if record is None:
-        raise HTTPException(status_code=404, detail="Not found")
+    records = result.scalars().all()
+    deleted_ids = [r.id for r in records]
 
-    was_latest = record.is_latest
-    kosync_user_id = record.kosync_user_id
-    document = record.document
+    # (kosync_user_id, document) pairs where a *latest* record was removed
+    affected = {(r.kosync_user_id, r.document) for r in records if r.is_latest}
 
-    await session.delete(record)
+    for record in records:
+        await session.delete(record)
     await session.flush()
 
-    if was_latest:
+    for kosync_user_id, document in affected:
         next_result = await session.execute(
             select(ReadingProgress)
             .where(
@@ -275,4 +278,4 @@ async def web_delete_record(
             next_record.is_latest = True
 
     await session.commit()
-    return {"deleted": record_id}
+    return {"deleted": deleted_ids}

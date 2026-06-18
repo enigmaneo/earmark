@@ -292,6 +292,35 @@ Authentication headers required. No request body.
 
 ---
 
+#### POST /web/records/delete
+
+Delete one or more reading-progress records by their numeric record IDs. Used by the web UI for both the per-row delete and the "Delete selected" bulk action. Only records owned by the authenticated web user are deleted; unknown or unowned IDs are silently skipped. When a deleted record was the latest for its document and other records remain, the newest remaining record is promoted to latest.
+
+Authenticated with a web-session bearer token (not the KOSync `x-auth-*` headers).
+
+##### Request
+
+```json
+{
+  "ids": [1, 2, 3]
+}
+```
+
+##### Response
+
+| Status | Meaning |
+|--------|---------|
+| `200 OK` | Records deleted (`deleted` lists the IDs actually removed; may be empty) |
+| `401 Unauthorized` | Missing or invalid web session |
+
+```json
+{
+  "deleted": [1, 2, 3]
+}
+```
+
+---
+
 ## Data Model
 
 Data is persisted in SQLite via SQLAlchemy. The KOSync-relevant tables are `kosync_users` and

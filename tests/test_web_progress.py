@@ -177,7 +177,7 @@ async def test_web_progress_auth_required(client: AsyncClient) -> None:
     assert res.status_code == 401
 
 
-# --- /web/records/{id} ---
+# --- /web/records/delete ---
 
 
 async def test_web_delete_record(
@@ -187,24 +187,94 @@ async def test_web_delete_record(
     list_res = await client.get("/web/progress", headers={"Authorization": f"Bearer {alice_jwt}"})
     record_id = list_res.json()["data"][0]["id"]
 
-    del_res = await client.delete(
-        f"/web/records/{record_id}", headers={"Authorization": f"Bearer {alice_jwt}"}
+    del_res = await client.post(
+        "/web/records/delete",
+        json={"ids": [record_id]},
+        headers={"Authorization": f"Bearer {alice_jwt}"},
     )
     assert del_res.status_code == 200
-    assert del_res.json() == {"deleted": record_id}
+    assert del_res.json() == {"deleted": [record_id]}
 
     list_after = await client.get("/web/progress", headers={"Authorization": f"Bearer {alice_jwt}"})
     assert list_after.json()["total"] == 0
 
 
-async def test_web_delete_record_not_found(client: AsyncClient, alice_jwt: str) -> None:
-    res = await client.delete(
-        "/web/records/99999", headers={"Authorization": f"Bearer {alice_jwt}"}
+async def test_web_delete_records_bulk(
+    client: AsyncClient, alice_jwt: str, alice_kosync: dict[str, str]
+) -> None:
+    # two historical records for the same document (only the second is latest)
+    await client.put("/syncs/progress", json=PROGRESS_PAYLOAD, headers=alice_kosync)
+    await client.put(
+        "/syncs/progress",
+        json={**PROGRESS_PAYLOAD, "percentage": 0.5, "progress": "/body/DocFragment[20]/body/p[1]"},
+        headers=alice_kosync,
     )
-    assert res.status_code == 404
+    list_res = await client.get("/web/progress", headers={"Authorization": f"Bearer {alice_jwt}"})
+    ids = [row["id"] for row in list_res.json()["data"]]
+    assert len(ids) == 2
+
+    del_res = await client.post(
+        "/web/records/delete",
+        json={"ids": ids},
+        headers={"Authorization": f"Bearer {alice_jwt}"},
+    )
+    assert del_res.status_code == 200
+    assert sorted(del_res.json()["deleted"]) == sorted(ids)
+
+    list_after = await client.get("/web/progress", headers={"Authorization": f"Bearer {alice_jwt}"})
+    assert list_after.json()["total"] == 0
 
 
-async def test_web_delete_record_ownership(
+async def test_web_delete_records_reassigns_latest(
+    client: AsyncClient, alice_jwt: str, alice_kosync: dict[str, str]
+) -> None:
+    await client.put("/syncs/progress", json=PROGRESS_PAYLOAD, headers=alice_kosync)
+    await client.put(
+        "/syncs/progress",
+        json={**PROGRESS_PAYLOAD, "percentage": 0.5, "progress": "/body/DocFragment[20]/body/p[1]"},
+        headers=alice_kosync,
+    )
+    list_res = await client.get(
+        "/web/progress?sort_by=is_latest&sort_dir=asc",
+        headers={"Authorization": f"Bearer {alice_jwt}"},
+    )
+    rows = list_res.json()["data"]
+    latest = next(r for r in rows if r["is_latest"])
+
+    del_res = await client.post(
+        "/web/records/delete",
+        json={"ids": [latest["id"]]},
+        headers={"Authorization": f"Bearer {alice_jwt}"},
+    )
+    assert del_res.status_code == 200
+
+    list_after = await client.get("/web/progress", headers={"Authorization": f"Bearer {alice_jwt}"})
+    remaining = list_after.json()["data"]
+    assert len(remaining) == 1
+    assert remaining[0]["is_latest"] is True
+
+
+async def test_web_delete_records_empty(client: AsyncClient, alice_jwt: str) -> None:
+    res = await client.post(
+        "/web/records/delete",
+        json={"ids": []},
+        headers={"Authorization": f"Bearer {alice_jwt}"},
+    )
+    assert res.status_code == 200
+    assert res.json() == {"deleted": []}
+
+
+async def test_web_delete_records_skips_unknown(client: AsyncClient, alice_jwt: str) -> None:
+    res = await client.post(
+        "/web/records/delete",
+        json={"ids": [99999]},
+        headers={"Authorization": f"Bearer {alice_jwt}"},
+    )
+    assert res.status_code == 200
+    assert res.json() == {"deleted": []}
+
+
+async def test_web_delete_records_ownership(
     client: AsyncClient,
     alice_jwt: str,
     alice_kosync: dict[str, str],
@@ -214,12 +284,19 @@ async def test_web_delete_record_ownership(
     list_res = await client.get("/web/progress", headers={"Authorization": f"Bearer {alice_jwt}"})
     record_id = list_res.json()["data"][0]["id"]
 
-    res = await client.delete(
-        f"/web/records/{record_id}", headers={"Authorization": f"Bearer {bob_jwt}"}
+    # bob cannot delete alice's record — it is silently skipped
+    res = await client.post(
+        "/web/records/delete",
+        json={"ids": [record_id]},
+        headers={"Authorization": f"Bearer {bob_jwt}"},
     )
-    assert res.status_code == 404
+    assert res.status_code == 200
+    assert res.json() == {"deleted": []}
+
+    list_after = await client.get("/web/progress", headers={"Authorization": f"Bearer {alice_jwt}"})
+    assert list_after.json()["total"] == 1
 
 
-async def test_web_delete_record_auth_required(client: AsyncClient) -> None:
-    res = await client.delete("/web/records/1")
+async def test_web_delete_records_auth_required(client: AsyncClient) -> None:
+    res = await client.post("/web/records/delete", json={"ids": [1]})
     assert res.status_code == 401
