@@ -97,6 +97,10 @@ class ProgressList(BaseModel):
     per_page: int
 
 
+class RecordDelete(BaseModel):
+    ids: list[int]
+
+
 class AlignmentJobCreate(BaseModel):
     abs_item_id: str
 

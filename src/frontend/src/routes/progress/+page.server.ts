@@ -98,19 +98,21 @@ export const load: PageServerLoad = async ({ cookies, url }) => {
 };
 
 export const actions: Actions = {
-	deleteRecord: async ({ request, cookies }) => {
+	deleteRecords: async ({ request, cookies }) => {
 		const token = cookies.get('earmark_session');
 		if (!token) return fail(401, { error: 'Not authenticated' });
 
 		const formData = await request.formData();
-		const id = Number(formData.get('id'));
+		const ids = JSON.parse(String(formData.get('ids') ?? '[]')) as number[];
 
-		const res = await fetch(`${BACKEND}/web/records/${id}`, {
-			method: 'DELETE',
-			headers: { Authorization: `Bearer ${token}` },
+		const res = await fetch(`${BACKEND}/web/records/delete`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+			body: JSON.stringify({ ids }),
 		});
 
 		if (!res.ok) return fail(res.status, { error: 'Delete failed' });
-		return { deleted: id };
+		const data = await res.json();
+		return { deleted: data.deleted as number[] };
 	},
 };
