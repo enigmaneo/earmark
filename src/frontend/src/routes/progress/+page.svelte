@@ -244,6 +244,7 @@
 	.progress-scroll {
 		overflow-x: scroll;
 		max-width: 18rem;
+		white-space: nowrap;
 		scrollbar-width: thin;
 		scrollbar-color: rgba(128, 128, 128, 0.6) rgba(128, 128, 128, 0.15);
 	}
