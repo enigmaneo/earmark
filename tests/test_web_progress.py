@@ -14,7 +14,15 @@ def md5(value: str) -> str:
 
 
 async def _register_and_login(client: AsyncClient, email: str, password: str) -> str:
-    await client.post("/auth/register", json={"email": email, "password": password})
+    await client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "password": password,
+            "kosync_username": email.split("@")[0] + "_web",
+            "kosync_password": password,
+        },
+    )
     res = await client.post("/auth/login", json={"email": email, "password": password})
     return res.json()["access_token"]
 

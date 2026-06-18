@@ -11,8 +11,10 @@ export const actions: Actions = {
 		const email = data.get('email') as string;
 		const password = data.get('password') as string;
 		const confirmPassword = data.get('confirm_password') as string;
+		const kosyncUsername = data.get('kosync_username') as string;
+		const kosyncPassword = data.get('kosync_password') as string;
 
-		if (!email || !password || !confirmPassword) {
+		if (!email || !password || !confirmPassword || !kosyncUsername || !kosyncPassword) {
 			return fail(400, { error: 'All fields are required' });
 		}
 		if (password !== confirmPassword) {
@@ -27,7 +29,12 @@ export const actions: Actions = {
 			registerRes = await fetch(`${BACKEND}/auth/register`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ email, password })
+				body: JSON.stringify({
+					email,
+					password,
+					kosync_username: kosyncUsername,
+					kosync_password: kosyncPassword
+				})
 			});
 		} catch {
 			return fail(503, { error: 'Could not reach server' });

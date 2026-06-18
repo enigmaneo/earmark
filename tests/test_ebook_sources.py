@@ -429,7 +429,13 @@ async def test_calibre_source_volume_prefix_does_not_mangle_plain_title() -> Non
 @pytest.fixture
 async def jwt_headers(client: AsyncClient) -> dict[str, str]:
     await client.post(
-        "/auth/register", json={"email": "src@example.com", "password": "secret"}
+        "/auth/register",
+        json={
+            "email": "src@example.com",
+            "password": "secret",
+            "kosync_username": "src_web",
+            "kosync_password": "secret",
+        },
     )
     resp = await client.post(
         "/auth/login", json={"email": "src@example.com", "password": "secret"}

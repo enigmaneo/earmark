@@ -59,6 +59,40 @@
 				/>
 			</label>
 
+			<hr class="hr" />
+
+			<div>
+				<h2 class="h4">KOSync credentials</h2>
+				<p class="text-surface-600-400 mt-1 text-sm">
+					Enter these same values in KOReader to sync. They don't have to match your email or
+					password above.
+				</p>
+			</div>
+
+			<label class="label">
+				<span>KOSync username</span>
+				<input
+					class="input"
+					type="text"
+					name="kosync_username"
+					placeholder="koreader-username"
+					autocomplete="off"
+					required
+				/>
+			</label>
+
+			<label class="label">
+				<span>KOSync password</span>
+				<input
+					class="input"
+					type="password"
+					name="kosync_password"
+					placeholder="••••••••"
+					autocomplete="new-password"
+					required
+				/>
+			</label>
+
 			<button type="submit" class="btn preset-filled-primary-500 w-full">Create account</button>
 		</form>
 

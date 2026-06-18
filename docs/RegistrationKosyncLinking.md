@@ -1,7 +1,7 @@
 # Design: KOSync credentials at registration
 
-> **Status:** design / not yet implemented. This document describes a planned change and the
-> implementation outline for it; the code referenced under "Proposed changes" does not exist yet.
+> **Status:** implemented. This document captures the design and rationale; the behaviour it
+> describes is live in the codebase.
 
 ## 1. Overview & goal
 

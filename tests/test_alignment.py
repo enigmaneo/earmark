@@ -69,7 +69,15 @@ def test_element_full_xpath_mixed_siblings() -> None:
 
 @pytest.fixture
 async def jwt_headers(client: AsyncClient) -> dict[str, str]:
-    await client.post("/auth/register", json={"email": "align@example.com", "password": "secret"})
+    await client.post(
+        "/auth/register",
+        json={
+            "email": "align@example.com",
+            "password": "secret",
+            "kosync_username": "align_web",
+            "kosync_password": "secret",
+        },
+    )
     resp = await client.post(
         "/auth/login", json={"email": "align@example.com", "password": "secret"}
     )
@@ -289,7 +297,15 @@ async def test_jobs_are_scoped_to_creator(
     job_id = created.json()["id"]
 
     # User B authenticates separately.
-    await client.post("/auth/register", json={"email": "other@example.com", "password": "secret"})
+    await client.post(
+        "/auth/register",
+        json={
+            "email": "other@example.com",
+            "password": "secret",
+            "kosync_username": "other_web",
+            "kosync_password": "secret",
+        },
+    )
     login = await client.post(
         "/auth/login", json={"email": "other@example.com", "password": "secret"}
     )
