@@ -28,6 +28,7 @@ Project documentation lives in `docs/`:
 - [`docs/Sync.md`](docs/Sync.md) — Bidirectional ABS ↔ KOSync progress sync
 - [`docs/Settings.md`](docs/Settings.md) — DB-backed settings system, override precedence, secret encryption
 - [`docs/LogsTab.md`](docs/LogsTab.md) — File-based logging, rotation, log API, and the Logs UI tab
+- [`docs/RegistrationKosyncLinking.md`](docs/RegistrationKosyncLinking.md) — Design: requiring KOSync credentials at registration and linking/adopting KosyncUsers
 
 ## Rules
 
