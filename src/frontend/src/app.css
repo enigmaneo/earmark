@@ -21,6 +21,18 @@
 	--base-font-color-dark: var(--base-font-color);
 }
 
+/* Scroll indicator arrows injected by the scrollIndicator Svelte action. */
+.scroll-hint {
+	opacity: 0.5;
+	font-size: 0.85em;
+	cursor: pointer;
+	user-select: none;
+	flex-shrink: 0;
+}
+.scroll-hint:hover {
+	opacity: 1;
+}
+
 /* Swap the full logo to its dark-background variant under a dark color-scheme.
    hamlindigo/reign are force-light above, so they keep the light logo. */
 .logo-dark {

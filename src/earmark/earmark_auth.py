@@ -1,3 +1,4 @@
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
@@ -22,6 +23,16 @@ def hash_password(password: str) -> str:
 
 def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
+
+
+def kosync_hash(password: str) -> str:
+    """MD5-hash a plaintext KOSync password.
+
+    KOReader sends ``MD5(password)`` as the stored password on ``/users/create`` and as the
+    ``x-auth-key`` header on subsequent requests. The web registration form collects a plaintext
+    KOSync password, so the server hashes it the same way before storing/comparing.
+    """
+    return hashlib.md5(password.encode()).hexdigest()
 
 
 def create_access_token(data: dict[str, object]) -> str:

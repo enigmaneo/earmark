@@ -50,6 +50,25 @@ No authentication required.
 }
 ```
 
+#### Relationship to earmark registration
+
+There are two ways a KOSync account (`kosync_users` row) comes into existence:
+
+- **`POST /users/create` (this endpoint, used by KOReader).** The client sends `MD5(password)`
+  as `password`; the server stores it verbatim. The account is created **unlinked** (no owning
+  earmark user) unless a web session bearer token is supplied.
+- **`POST /auth/register` (the earmark web app).** The registration form requires a KOSync
+  username and a **plaintext** KOSync password (independent of the earmark email/password). The
+  server MD5-hashes the plaintext itself so the stored hash matches the future `x-auth-key`, then:
+  - if the username is free → creates a new KOSync account owned by the new earmark user;
+  - if the username already exists, is **unlinked**, and `MD5(supplied password)` matches the
+    stored hash → **adopts** it (sets its owner), so any reading progress recorded earlier is
+    carried over automatically (progress is keyed by `kosync_user_id`);
+  - if the username is already owned, or the password doesn't match → the whole registration is
+    rejected with `409 Conflict` and no earmark user is created.
+
+See [`docs/RegistrationKosyncLinking.md`](RegistrationKosyncLinking.md) for the full design.
+
 ---
 
 ### GET /users/auth
@@ -275,18 +294,21 @@ Authentication headers required. No request body.
 
 ## Data Model
 
-Data is persisted in SQLite via SQLAlchemy. There are two tables.
+Data is persisted in SQLite via SQLAlchemy. The KOSync-relevant tables are `kosync_users` and
+`reading_progress`; the earmark web account lives in a separate `users` table (email + bcrypt
+password) and is referenced by `kosync_users.user_id`.
 
-### `users`
+### `kosync_users`
 
-Stores registered accounts. No changes needed from the initial model.
+Stores KOSync accounts used by KOReader devices.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
 | `id` | INTEGER | PK, autoincrement | Internal row ID |
 | `username` | VARCHAR(255) | UNIQUE, NOT NULL, indexed | KOSync username |
-| `password_hash` | VARCHAR(255) | NOT NULL | MD5 hash of the password — KOReader clients hash client-side before sending, so this value is stored as received |
+| `password_hash` | VARCHAR(255) | NOT NULL | MD5 hash of the password — KOReader clients hash client-side before sending, so this value is stored as received; the web registration form sends plaintext that the server MD5-hashes to the same form |
 | `created_at` | DATETIME | NOT NULL, server default | Account creation timestamp |
+| `user_id` | INTEGER | FK → users.id, nullable | Owning earmark user; `NULL` for accounts not yet linked to a web account |
 
 ---
 

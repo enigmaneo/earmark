@@ -15,6 +15,13 @@ class UserCreate(BaseModel):
     password: str
 
 
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str
+    kosync_username: str
+    kosync_password: str
+
+
 class UserRead(BaseModel):
     id: int
     email: str

@@ -13,6 +13,8 @@ There are two separate user systems:
 - **User** (`users` table) — the earmark web app user. Authenticates with email + password (bcrypt). Issues JWT tokens used for the web session.
 - **KosyncUser** (`kosync_users` table) — the KOReader/KOSync user. Authenticates with `x-auth-user` / `x-auth-key` headers (MD5 hash, per KOSync protocol). One User can own many KosyncUsers.
 
+Registration (`POST /auth/register`) requires a KOSync username + plaintext password alongside the email + password; this is the primary way a KosyncUser is tied to a User. The server MD5-hashes the plaintext KOSync password (matching what KOReader sends as `x-auth-key`), then creates a new KosyncUser or **adopts** an existing unlinked one whose password matches — carrying its reading progress along. The mapping-based linking in `services/progress.py` remains as a fallback for legacy/standalone KosyncUsers. See [`docs/RegistrationKosyncLinking.md`](docs/RegistrationKosyncLinking.md).
+
 Web sessions are stored as HTTP-only cookies (`earmark_session`) containing a JWT Bearer token. The SvelteKit frontend validates the session by calling `GET /auth/me`.
 
 ## Docs
@@ -28,6 +30,7 @@ Project documentation lives in `docs/`:
 - [`docs/Sync.md`](docs/Sync.md) — Bidirectional ABS ↔ KOSync progress sync
 - [`docs/Settings.md`](docs/Settings.md) — DB-backed settings system, override precedence, secret encryption
 - [`docs/LogsTab.md`](docs/LogsTab.md) — File-based logging, rotation, log API, and the Logs UI tab
+- [`docs/RegistrationKosyncLinking.md`](docs/RegistrationKosyncLinking.md) — Design: requiring KOSync credentials at registration and linking/adopting KosyncUsers
 
 ## Rules
 

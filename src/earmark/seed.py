@@ -1,17 +1,16 @@
 import asyncio
-import hashlib
 import json
 from datetime import UTC, datetime
 
 from sqlalchemy import select, text
 
 from earmark.database import AsyncSessionLocal, Base, engine, init_db
-from earmark.earmark_auth import hash_password
+from earmark.earmark_auth import hash_password, kosync_hash
 from earmark.models import AbsEbookMapping, AbsLibraryItem, KosyncUser, ReadingProgress, User
 
 
 def md5(value: str) -> str:
-    return hashlib.md5(value.encode()).hexdigest()
+    return kosync_hash(value)
 
 
 ABS_LIBRARY_ITEMS = [
