@@ -6,6 +6,7 @@
 	import type { PageData } from './$types';
 	import type { SortBy, SortDir, ProgressItem } from '$lib/api';
 	import { revealOnTap } from '$lib/revealOnTap';
+	import { scrollIndicator } from '$lib/scrollIndicator';
 
 	let { data }: { data: PageData } = $props();
 
@@ -135,7 +136,7 @@
 						<td class="max-w-xs truncate" title={item.title} use:revealOnTap={item.title}>{item.title}</td>
 						<td class="hidden lg:table-cell max-w-xs truncate font-mono text-xs text-surface-500" title={item.document} use:revealOnTap={item.document}>{item.document}</td>
 						<td>{formatPercent(item.percentage)}</td>
-						<td class="hidden lg:table-cell max-w-xs truncate font-mono text-xs" title={item.progress} use:revealOnTap={item.progress}>{item.progress}</td>
+						<td class="hidden lg:table-cell font-mono text-xs progress-scroll-cell" style="display: flex; align-items: center; gap: 2px;"><div class="progress-scroll" use:scrollIndicator use:revealOnTap={item.progress}>{item.progress}</div></td>
 						<td class="hidden lg:table-cell truncate" title={item.device} use:revealOnTap={item.device}>{item.device}</td>
 						<td class="hidden lg:table-cell">{item.is_latest ? '✓' : ''}</td>
 						<td class="truncate" title={formatDate(item.timestamp)} use:revealOnTap={formatDate(item.timestamp)}>{formatDate(item.timestamp)}</td>
@@ -238,3 +239,12 @@
 		</form>
 	</div>
 </Modal>
+
+<style>
+	.progress-scroll {
+		overflow-x: scroll;
+		max-width: 18rem;
+		scrollbar-width: thin;
+		scrollbar-color: rgba(128, 128, 128, 0.6) rgba(128, 128, 128, 0.15);
+	}
+</style>
