@@ -1,6 +1,7 @@
 services:
   backend:
     image: earmark-backend
+    container_name: earmark-backend
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -15,6 +16,7 @@ services:
 
   frontend:
     image: earmark-frontend
+    container_name: earmark-frontend
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -29,6 +31,7 @@ services:
 
   nginx:
     image: nginx:alpine
+    container_name: earmark-nginx
     ports:
       - "${PORT:-7070}:80"
     volumes:

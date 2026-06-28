@@ -1,0 +1,85 @@
+name: Publish
+
+# Publishes the backend and frontend images to GitHub Container Registry.
+# Triggered only by pushing a version tag — never by a merge to main.
+#
+#   Stable release:   git tag v1.2.3        && git push origin v1.2.3
+#   Beta / prerelease: git tag v1.2.3-beta.1 && git push origin v1.2.3-beta.1
+#
+# Stable tags publish 1.2.3 / 1.2 / latest. Prerelease tags (any tag containing
+# a hyphen, e.g. -beta.1, -rc.2) publish the full version plus a rolling `beta`
+# tag, and never move `latest`.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write   # create GitHub Releases
+  packages: write   # push images to GHCR
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: backend
+            image: earmark-backend
+          - target: frontend
+            image: earmark-frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      # QEMU + buildx enable multi-arch builds (x86_64 and Apple Silicon / arm64).
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          # `latest=auto` moves `latest` only for the highest non-prerelease tag.
+          flavor: latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=beta,enable=${{ contains(github.ref_name, '-') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  # Create a GitHub Release for the pushed tag once both images are published.
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Auto-generate notes from merged PRs/commits since the previous tag.
+          generate_release_notes: true
+          # Created as a draft to review/edit and publish manually in the UI.
+          draft: true
+          # Tags containing a hyphen (-beta.1, -alpha, -rc.2) are flagged pre-release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
