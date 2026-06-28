@@ -17,7 +17,7 @@ export default defineConfig({
 				description: 'Sync your Audiobookshelf and KOReader reading progress.',
 				start_url: '/',
 				display: 'standalone',
-				background_color: '#0f0f0f',
+				background_color: '#ffffff',
 				theme_color: '#0f0f0f',
 				icons: [
 					{ src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' },
