@@ -14,8 +14,8 @@ on:
     tags: ['v*.*.*']
 
 permissions:
-  contents: read
-  packages: write
+  contents: write   # create GitHub Releases
+  packages: write   # push images to GHCR
 
 jobs:
   publish:
@@ -68,3 +68,18 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  # Create a GitHub Release for the pushed tag once both images are published.
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Auto-generate notes from merged PRs/commits since the previous tag.
+          generate_release_notes: true
+          # Created as a draft to review/edit and publish manually in the UI.
+          draft: true
+          # Tags containing a hyphen (-beta.1, -alpha, -rc.2) are flagged pre-release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
