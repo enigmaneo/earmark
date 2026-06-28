@@ -6,6 +6,16 @@
 		<link rel="icon" type="image/png" href="%sveltekit.assets%/favicon.png?v=2" />
 		<link rel="apple-touch-icon" href="%sveltekit.assets%/apple-touch-icon.png?v=2" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>earmark</title>
+		<meta name="description" content="Sync your Audiobookshelf and KOReader reading progress." />
+		<meta name="theme-color" content="#0f0f0f" />
+		<meta name="mobile-web-app-capable" content="yes" />
+		<!-- iOS PWA: Safari ignores the web manifest, so standalone launch, home-screen
+		     name, and status bar style are driven by these apple-specific tags. The home
+		     screen icon comes from the apple-touch-icon link above. -->
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-title" content="earmark" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="default" />
 		<script>
 			// Apply the saved theme before first paint to avoid a flash of the default.
 			// Keep the known values in sync with src/lib/theme.svelte.ts.
