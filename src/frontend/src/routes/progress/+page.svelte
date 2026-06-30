@@ -134,7 +134,7 @@
 			<img
 				src="/mappings/cover?abs_item_id={encodeURIComponent(data.mappedAbsItemId)}"
 				alt="Audiobook cover"
-				class="h-16 w-auto rounded shadow sm:ml-auto"
+				class="h-16 w-auto self-start rounded shadow sm:ml-auto"
 			/>
 		{/if}
 	</div>
