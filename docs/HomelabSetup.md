@@ -76,7 +76,7 @@ GitHub Container Registry (GHCR):
 ```yaml
 services:
   backend:
-    image: ghcr.io/rmontgomery2018/earmark-backend:latest
+    image: ghcr.io/enigmaneo/earmark-backend:latest
     container_name: earmark-backend
     env_file: .env
     environment:
@@ -87,7 +87,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    image: ghcr.io/rmontgomery2018/earmark-frontend:latest
+    image: ghcr.io/enigmaneo/earmark-frontend:latest
     container_name: earmark-frontend
     env_file: .env
     environment:
