@@ -14,6 +14,10 @@ earmark runs a KOSync-compatible API server that KOReader can sync to directly. 
 
 ## Setup
 
+> **Running this on a home server?** Follow the **[Homelab Setup Guide](docs/HomelabSetup.md)** —
+> a step-by-step, screenshot-illustrated walkthrough that deploys earmark with prebuilt Docker
+> images (no source checkout needed). The instructions below are for **local development**.
+
 ### 1. Configure environment
 
 ```bash
