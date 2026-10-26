@@ -304,10 +304,14 @@ def _parse_epub_sync(
     ]
 
     first_body_pos, last_body_pos, _ = _classify_spine(book)
+    toc_titles = _toc_title_map(book)
 
     paragraphs: list[str] = []
     index: dict[str, dict[str, str]] = {}
     seq = 0
+    # A TOC title whose document had no text yet (an image-only chapter-title
+    # page split from the chapter body), waiting for the next paragraph.
+    pending_toc_title: str | None = None
 
     for spine_pos, item_id in enumerate(spine_items, start=1):
         if spine_pos < first_body_pos or spine_pos > last_body_pos:
@@ -321,6 +325,14 @@ def _parse_epub_sync(
         # snapped to the ABS chapter starts instead of the real headings.
         if _is_toc_page(soup):
             continue
+        # The EPUB TOC's title for this document ("chapter 12"), kept on its
+        # first paragraph. Some books render chapter titles as images, so the
+        # TOC is the only text saying where each chapter starts. When the
+        # titled document is image-only (Calibre splits the title art into
+        # its own file), the title carries over to the next document's text.
+        toc_title = toc_titles.get(item.file_name) or pending_toc_title
+        pending_toc_title = toc_title
+        is_first_block = True
         for element in soup.find_all(_BLOCK_TAGS):
             text = element.get_text(separator=" ").strip()
             if not text:
@@ -329,6 +341,10 @@ def _parse_epub_sync(
             rel_path = _element_full_xpath(element)
             ebook_pos = f"/body/DocFragment[{spine_pos}]{rel_path}"
             index[para_id] = {"text": text, "ebook_pos": ebook_pos}
+            if is_first_block and toc_title:
+                index[para_id]["toc_title"] = toc_title
+            is_first_block = False
+            pending_toc_title = None
             paragraphs.append(text)
             seq += 1
 
@@ -499,13 +515,17 @@ _GAP_MIN_PARAS = 5
 _EPUB_HEADING_RE = re.compile(r"/h[1-6]\[\d+\]$")
 _DOCFRAG_RE = re.compile(r"/body/DocFragment\[(\d+)\]")
 _CHAPTER_HEADING_RE = re.compile(
-    r"^\s*(prologue|epilogue|chapter\s+\S+)", re.IGNORECASE
+    r"^\s*(prologue|epilogue|chapter\s+\S+|interlude\s+(?:\d+|[ivxl]+)\b)",
+    re.IGNORECASE,
 )
 # Drop-cap / small-caps chapter markup ("C<small>HAPTER</small> 1") extracts
 # with an injected space after the first letter ("C HAPTER 1") because
 # paragraph text uses get_text(separator=" "). Rejoining the leading letter
 # lets such headings still match _CHAPTER_HEADING_RE.
 _DROP_CAP_RE = re.compile(r"^\s*([A-Za-z])\s+(?=[A-Za-z])")
+# Bare-numbered EPUB TOC titles: "12: beyond the brands" (chapter 12) and
+# "i-3: el" (interlude 3), as in one Wind and Truth EPUB.
+_TOC_NUMBERED_RE = re.compile(r"^\s*(i-)?(\d+)\s*[:.]\s*", re.IGNORECASE)
 
 
 def _chapter_heading_match(text: str) -> re.Match[str] | None:
@@ -532,6 +552,42 @@ def _is_heading_entry(
     return _chapter_heading_match(text)
 
 
+def _toc_title_as_heading(title: str) -> str:
+    """Spell out a bare-numbered TOC title as a chapter marker.
+
+    '12: beyond the brands' → 'chapter 12 beyond the brands' and
+    'i-3: el' → 'interlude 3 el'; anything else is returned unchanged. Only
+    applied to TOC titles — a paragraph opening with "1." is too ambiguous.
+    """
+    m = _TOC_NUMBERED_RE.match(title)
+    if not m:
+        return title
+    kind = "interlude" if m.group(1) else "chapter"
+    return f"{kind} {m.group(2)} {title[m.end():]}"
+
+
+def _heading_match_for(
+    entry: dict[str, str], is_first_in_fragment: bool
+) -> tuple[re.Match[str] | None, bool]:
+    """Chapter-marker match for an index entry, falling back to its TOC title.
+
+    Returns ``(match, from_toc)``. The paragraph's own text wins; the EPUB TOC
+    title is only consulted when the text has no chapter marker. That covers
+    books whose chapter titles are images (Wind and Truth), where the first
+    text block is an epigraph and only the TOC says "chapter 12" (or just
+    "12: beyond the brands").
+    """
+    m = _is_heading_entry(entry["text"], entry["ebook_pos"], is_first_in_fragment)
+    if m:
+        return m, False
+    toc_title = entry.get("toc_title")
+    if toc_title:
+        m = _chapter_heading_match(_toc_title_as_heading(toc_title))
+        if m:
+            return m, True
+    return None, False
+
+
 _ROMAN_VALUES = {
     "i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6, "vii": 7,
     "viii": 8, "ix": 9, "x": 10, "xi": 11, "xii": 12, "xiii": 13,
@@ -553,17 +609,14 @@ def _parse_chapter_number(token: str) -> int | None:
     return _ROMAN_VALUES.get(token)
 
 
-_ABS_CHAPTER_NUM_RE = re.compile(r"\bchapter\s+(\S+)", re.IGNORECASE)
-
-
-def _abs_chapter_number(title: str) -> int | None:
-    """Parse the chapter number out of an ABS chapter title.
+def _abs_numbered_title(title: str, kind: str = "chapter") -> int | None:
+    """Parse the ``kind`` number ("chapter" or "interlude") out of an ABS title.
 
     Parsing the number out of the title — rather than substituting it into a
     regex and searching — makes the match insensitive to zero-padding, so
     'Chapter 01 - Eastward the Wind Blew' matches the heading 'CHAPTER 1'.
     """
-    m = _ABS_CHAPTER_NUM_RE.search(title or "")
+    m = re.search(rf"\b{kind}\s+(\S+)", title or "", re.IGNORECASE)
     return _parse_chapter_number(m.group(1)) if m else None
 
 
@@ -580,6 +633,7 @@ def _match_heading_to_abs_chapter(
       - 'chapter <n>' → ABS chapter whose title carries the same chapter
         number, where <n> can be Arabic or Roman on either side and
         zero-padding ('Chapter 01') is ignored.
+      - 'interlude <n>' → same, against 'Interlude <n>' ABS titles.
     Returns None when no chapter matches.
     """
     text = heading_text.strip().lower()
@@ -603,15 +657,16 @@ def _match_heading_to_abs_chapter(
                 return i
         return None
 
-    m = re.match(r"chapter\s+(\S+)", text)
+    m = re.match(r"(chapter|interlude)\s+(\S+)", text)
     if not m:
         return None
-    n = _parse_chapter_number(m.group(1))
+    kind = m.group(1)
+    n = _parse_chapter_number(m.group(2))
     if n is None:
         return None
 
     for i, ch in enumerate(chapters):
-        if _abs_chapter_number(ch.get("title") or "") == n:
+        if _abs_numbered_title(ch.get("title") or "", kind) == n:
             return i
     return None
 
@@ -846,6 +901,52 @@ def _transcript_coverage_warnings(
     return [
         f"transcript_tail_gap: last transcribed word at {last_word_end:.0f}s "
         f"of {audio_duration:.0f}s of audio ({gap:.0f}s unmatched)"
+    ]
+
+
+# Content check on a finished sync map: sample entries and confirm each one's
+# text really is spoken near its timestamp. Structural checks can't see a map
+# whose timestamps are simply wrong — Wind and Truth once shipped with every
+# paragraph squeezed into hours 43–53 of a 63 h book and no warning at all.
+# On correctly aligned books 45–100% of samples verify; broken ones were <15%.
+_VERIFY_SAMPLE_STEP = 10
+_VERIFY_MIN_CHARS = 60  # shorter lines fuzzy-match almost anywhere
+_VERIFY_MAX_CHARS = 300
+_VERIFY_WINDOW_SECONDS = 90.0
+_VERIFY_MIN_SCORE = 70.0
+_VERIFY_MIN_FRACTION = 0.40
+
+
+def _unverified_sync_map_warnings(
+    sync_map: list[dict],  # type: ignore[type-arg]
+    transcript: str,
+    ranges: list[tuple[int, int, float, float]],
+) -> list[str]:
+    """Warn when too few sampled entries are found in the audio at their timestamps."""
+    from rapidfuzz import fuzz
+
+    if not sync_map or not ranges:
+        return []
+    time_starts = [r[2] for r in ranges]
+    verified = sampled = 0
+    for entry in sync_map[::_VERIFY_SAMPLE_STEP]:
+        text = _normalize_text(entry["text_snippet"])
+        if len(text) < _VERIFY_MIN_CHARS:
+            continue
+        t = float(entry["audio_start"])
+        start = _char_at_time(ranges, time_starts, t - _VERIFY_WINDOW_SECONDS)
+        end_word = _word_index_at_char(
+            ranges, _char_at_time(ranges, time_starts, t + _VERIFY_WINDOW_SECONDS)
+        )
+        window = transcript[start : ranges[end_word][1]]
+        sampled += 1
+        if fuzz.partial_ratio(text[:_VERIFY_MAX_CHARS], window) >= _VERIFY_MIN_SCORE:
+            verified += 1
+    if not sampled or verified / sampled >= _VERIFY_MIN_FRACTION:
+        return []
+    return [
+        f"sync_map_unverified: only {verified}/{sampled} sampled paragraphs "
+        "found in the audio near their timestamps"
     ]
 
 
@@ -1326,7 +1427,7 @@ class AlignmentPipeline:
                 frag = frag_match.group(1) if frag_match else None
                 is_first_in_fragment = frag is not None and frag != prev_frag
                 prev_frag = frag
-                m = _is_heading_entry(entry["text"], entry["ebook_pos"], is_first_in_fragment)
+                m, _ = _heading_match_for(entry, is_first_in_fragment)
                 if not m:
                     continue
                 abs_idx = _match_heading_to_abs_chapter(m.group(1), chapters)
@@ -1390,8 +1491,11 @@ class AlignmentPipeline:
                 frag = frag_match.group(1) if frag_match else None
                 is_first_in_fragment = frag is not None and frag != prev_frag
                 prev_frag = frag
-                m = _is_heading_entry(
-                    entry["text_snippet"], entry["ebook_pos"], is_first_in_fragment
+                # Look the TOC title up on the index entry: it belongs to the
+                # document's first paragraph, which may not be the first
+                # *mapped* entry of the fragment.
+                m, from_toc = _heading_match_for(
+                    index[entry["id"]], is_first_in_fragment
                 )
                 if m is None and not _EPUB_HEADING_RE.search(entry["ebook_pos"]):
                     continue
@@ -1400,7 +1504,10 @@ class AlignmentPipeline:
                     _match_heading_to_abs_chapter(m.group(1), chapters) if m else None
                 )
                 heading_matches.append(abs_idx)
-                if m and abs_idx is None:
+                # TOC titles are a best-effort fallback; a book whose ABS
+                # chapters are generically named ("01-68 …") shouldn't warn
+                # once per TOC entry.
+                if m and abs_idx is None and not from_toc:
                     unmatched_headings.append(entry["text_snippet"][:40])
 
         matched_indices = [i for i in heading_matches if i is not None]
@@ -1606,6 +1713,11 @@ class AlignmentPipeline:
         # No audio trim → audio_offset is always 0.
         warnings.extend(
             _validate_sync_map(sync_map, {}, total_duration, 0.0, epub_frag_counts)
+        )
+        warnings.extend(
+            await asyncio.to_thread(
+                _unverified_sync_map_warnings, sync_map, transcript, ranges
+            )
         )
         # No chapter heading was detected/snapped anywhere in the book even
         # though ABS supplied Chapter/Prologue/Epilogue-style chapters —

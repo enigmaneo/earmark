@@ -16,11 +16,15 @@ from earmark.services.alignment import (
     _chapter_heading_match,
     _classify_spine_item,
     _element_full_xpath,
+    _heading_match_for,
     _is_blurb_shaped,
     _is_toc_page,
     _match_heading_to_abs_chapter,
+    _parse_epub_sync,
     _stage_progress,
+    _toc_title_as_heading,
     _transcript_coverage_warnings,
+    _unverified_sync_map_warnings,
     _validate_sync_map,
     recover_orphaned_jobs,
     run_alignment_job,
@@ -1182,7 +1186,247 @@ def test_chapter_heading_match_plain_and_non_chapter() -> None:
     assert _chapter_heading_match("F OREWORD") is None
 
 
+# Wind and Truth: ABS names interludes "Interlude N: <title>".
+_INTERLUDE_CHAPTERS = [
+    {"id": 0, "start": 0.0, "end": 100.0, "title": "Chapter 13: Promise"},
+    {"id": 1, "start": 100.0, "end": 110.0, "title": "Interludes"},
+    {"id": 2, "start": 110.0, "end": 200.0, "title": "Interlude 1: Kalak"},
+    {"id": 3, "start": 200.0, "end": 300.0, "title": "Interlude 2: The Divided God"},
+]
+
+
+def test_match_heading_interlude_number() -> None:
+    assert _match_heading_to_abs_chapter("interlude 2", _INTERLUDE_CHAPTERS) == 3
+    assert _match_heading_to_abs_chapter("INTERLUDE II", _INTERLUDE_CHAPTERS) == 3
+    # Interlude numbers don't match chapter numbers, and vice versa.
+    assert _match_heading_to_abs_chapter("interlude 13", _INTERLUDE_CHAPTERS) is None
+    assert _match_heading_to_abs_chapter("chapter 1", _INTERLUDE_CHAPTERS) is None
+
+
+def test_chapter_heading_match_interlude_needs_number() -> None:
+    m = _chapter_heading_match("interlude 1")
+    assert m is not None and m.group(1) == "interlude 1"
+    # An unnumbered interlude can't be paired with an ABS chapter.
+    assert _chapter_heading_match("Interludes") is None
+    assert _chapter_heading_match("Interlude The Wrong Lesson") is None
+
+
+def test_heading_match_for_falls_back_to_toc_title() -> None:
+    entry = {
+        "text": "I should have known I was being watched. All my life, the signs were there.",
+        "ebook_pos": "/body/DocFragment[14]/body/p[1]",
+        "toc_title": "chapter 1",
+    }
+    m, from_toc = _heading_match_for(entry, True)
+    assert m is not None and m.group(1) == "chapter 1"
+    assert from_toc
+
+
+def test_toc_title_as_heading_bare_numbers() -> None:
+    """Bare-numbered TOC titles (one Wind and Truth EPUB) read as chapter/interlude N."""
+    m = _chapter_heading_match(_toc_title_as_heading("1: unfamiliar ground"))
+    assert m is not None and m.group(1) == "chapter 1"
+    m = _chapter_heading_match(_toc_title_as_heading("i-3: el"))
+    assert m is not None and m.group(1) == "interlude 3"
+    assert _toc_title_as_heading("prologue: to live") == "prologue: to live"
+    assert _chapter_heading_match(_toc_title_as_heading("about the author")) is None
+
+
+def test_heading_match_for_bare_numbered_toc_title() -> None:
+    entry = {
+        "text": "I was not with them. I did not know of their quest until later.",
+        "ebook_pos": "/body/DocFragment[20]/body/p[1]",
+        "toc_title": "12: beyond the brands",
+    }
+    m, from_toc = _heading_match_for(entry, True)
+    assert m is not None
+    assert _match_heading_to_abs_chapter(
+        m.group(1), [{"title": "Chapter 12: Beyond the Brands"}]
+    ) == 0
+    assert from_toc
+
+
+def test_heading_match_for_prefers_text_heading() -> None:
+    entry = {
+        "text": "CHAPTER 2",
+        "ebook_pos": "/body/DocFragment[3]/body/h2[1]",
+        "toc_title": "chapter 7",
+    }
+    m, from_toc = _heading_match_for(entry, True)
+    assert m is not None and m.group(1) == "CHAPTER 2"
+    assert not from_toc
+
+
+def _write_epub(path: Path, docs: list[tuple[str, str, str | None]]) -> None:
+    """Write a minimal EPUB. docs = [(file_name, body_html, toc_title or None)]."""
+    from ebooklib import epub
+
+    book = epub.EpubBook()
+    book.set_identifier("test-book")
+    book.set_title("Test Book")
+    book.set_language("en")
+    items = []
+    toc = []
+    for i, (file_name, body, toc_title) in enumerate(docs):
+        item = epub.EpubHtml(uid=f"doc{i}", file_name=file_name, title=toc_title or "")
+        item.content = f"<html><body>{body}</body></html>"
+        book.add_item(item)
+        items.append(item)
+        if toc_title:
+            toc.append(epub.Link(file_name, toc_title, f"toc{i}"))
+    book.toc = toc
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = items
+    epub.write_epub(str(path), book)
+
+
+_PROSE = (
+    "Kaladin felt good. Not great, not after spending weeks hiding in an "
+    "occupied city, but good enough to stand at the window and breathe."
+)
+
+
+def test_parse_epub_carries_toc_title_to_first_paragraph(tmp_path: Path) -> None:
+    """Image-titled chapters (Wind and Truth) get their heading from the TOC."""
+    epub_path = tmp_path / "book.epub"
+    _write_epub(epub_path, [
+        # Chapter 1: title art, then an epigraph and prose, in one document.
+        ("ch1.xhtml",
+         '<div><img src="arch.jpg" alt="arch"/></div>'
+         "<p>I should have known I was being watched.</p>"
+         f"<p>{_PROSE}</p><p>{_PROSE}</p>",
+         "Chapter 1"),
+        # Chapter 2: title art split into its own document by Calibre; the
+        # TOC points at it, and the text starts in the next document.
+        ("ch2_split_000.xhtml", '<div><img src="arch.jpg" alt="arch"/></div>',
+         "Chapter 2"),
+        ("ch2_split_001.xhtml",
+         f"<p>Szeth danced.</p><p>{_PROSE}</p><p>{_PROSE}</p>", None),
+    ])
+
+    _, index, _, _ = _parse_epub_sync(epub_path)
+    titled = {e["text"][:20]: e["toc_title"] for e in index.values() if "toc_title" in e}
+    assert titled == {
+        "I should have known ": "chapter 1",
+        "Szeth danced.": "chapter 2",
+    }
+
+
 # ── chapter snap end-to-end in the pipeline ────────────────────────────────────
+
+
+async def test_pipeline_snaps_toc_titled_chapter_to_abs_start(
+    client: AsyncClient,
+    jwt_headers: dict[str, str],
+    db_session_factory: async_sessionmaker,  # type: ignore[type-arg]
+    tmp_path: Path,
+) -> None:
+    """A chapter with no text heading is snapped via its EPUB TOC title."""
+    paragraphs = [
+        "First narrative paragraph of chapter one with substantive content.",
+        "An epigraph opens the second chapter, whose title is only an image.",
+        "Second chapter continues with substantive content for fuzzy matching.",
+    ]
+    index = {
+        "para_000": {
+            "text": paragraphs[0],
+            "ebook_pos": "/body/DocFragment[1]/body/p[1]",
+            "toc_title": "chapter 1",
+        },
+        "para_001": {
+            "text": paragraphs[1],
+            "ebook_pos": "/body/DocFragment[2]/body/p[1]",
+            "toc_title": "chapter 2",
+        },
+        "para_002": {
+            "text": paragraphs[2],
+            "ebook_pos": "/body/DocFragment[2]/body/p[2]",
+        },
+    }
+    metadata = copy.deepcopy(ABS_METADATA)
+    metadata["media"]["chapters"] = [
+        {"id": 0, "start": 0.0, "end": 5.0, "title": "Intro"},
+        {"id": 1, "start": 5.0, "end": 500.0, "title": "Chapter 1: Unfamiliar Ground"},
+        {"id": 2, "start": 500.0, "end": 1000.0, "title": "Chapter 2: Taking the Next Step"},
+    ]
+    words = _words_for(paragraphs)
+
+    resp = await client.post(
+        "/alignment/jobs", json={"abs_item_id": ABS_ITEM_ID}, headers=jwt_headers
+    )
+    job_id = resp.json()["id"]
+
+    await _run_pipeline(
+        job_id, db_session_factory, tmp_path,
+        abs_metadata_override=metadata,
+        paragraphs_override=paragraphs, index_override=index, words_override=words,
+    )
+
+    resp = await client.get(f"/alignment/jobs/{job_id}/sync-map", headers=jwt_headers)
+    entries = {e["id"]: e for e in resp.json()}
+    assert entries["para_001"]["audio_start"] == pytest.approx(500.0)
+    assert entries["para_001"]["audio_end"] == pytest.approx(505.0)
+
+
+async def test_pipeline_snaps_bare_numbered_toc_titles_to_abs_start(
+    client: AsyncClient,
+    jwt_headers: dict[str, str],
+    db_session_factory: async_sessionmaker,  # type: ignore[type-arg]
+    tmp_path: Path,
+) -> None:
+    """TOC titles like '2: title' / 'i-1: title' snap to ABS Chapter/Interlude N."""
+    paragraphs = [
+        "First narrative paragraph of chapter one with substantive content.",
+        "An epigraph opens the second chapter, whose title is only an image.",
+        "Second chapter continues with substantive content for fuzzy matching.",
+        "The interlude opens with a different viewpoint character entirely.",
+    ]
+    index = {
+        "para_000": {
+            "text": paragraphs[0],
+            "ebook_pos": "/body/DocFragment[1]/body/p[1]",
+            "toc_title": "1: unfamiliar ground",
+        },
+        "para_001": {
+            "text": paragraphs[1],
+            "ebook_pos": "/body/DocFragment[2]/body/p[1]",
+            "toc_title": "2: taking the next step",
+        },
+        "para_002": {
+            "text": paragraphs[2],
+            "ebook_pos": "/body/DocFragment[2]/body/p[2]",
+        },
+        "para_003": {
+            "text": paragraphs[3],
+            "ebook_pos": "/body/DocFragment[3]/body/p[1]",
+            "toc_title": "i-1: kalak",
+        },
+    }
+    metadata = copy.deepcopy(ABS_METADATA)
+    metadata["media"]["chapters"] = [
+        {"id": 0, "start": 0.0, "end": 5.0, "title": "Intro"},
+        {"id": 1, "start": 5.0, "end": 500.0, "title": "Chapter 1: Unfamiliar Ground"},
+        {"id": 2, "start": 500.0, "end": 1000.0, "title": "Chapter 2: Taking the Next Step"},
+        {"id": 3, "start": 1000.0, "end": 1500.0, "title": "Interlude 1: Kalak"},
+    ]
+    words = _words_for(paragraphs)
+
+    resp = await client.post(
+        "/alignment/jobs", json={"abs_item_id": ABS_ITEM_ID}, headers=jwt_headers
+    )
+    job_id = resp.json()["id"]
+
+    await _run_pipeline(
+        job_id, db_session_factory, tmp_path,
+        abs_metadata_override=metadata,
+        paragraphs_override=paragraphs, index_override=index, words_override=words,
+    )
+
+    resp = await client.get(f"/alignment/jobs/{job_id}/sync-map", headers=jwt_headers)
+    entries = {e["id"]: e for e in resp.json()}
+    assert entries["para_001"]["audio_start"] == pytest.approx(500.0)
+    assert entries["para_003"]["audio_start"] == pytest.approx(1000.0)
 
 
 async def test_pipeline_snaps_chapter_heading_to_abs_start(
@@ -1593,3 +1837,54 @@ def test_mapping_read_warnings_malformed_json() -> None:
 
 def test_mapping_read_warnings_passthrough_list() -> None:
     assert _mapping_read_with_warnings(["a", "b"]) == ["a", "b"]
+
+
+# ── _unverified_sync_map_warnings ──────────────────────────────────────────────
+
+
+def _verify_fixture() -> tuple[list[dict], list[dict[str, float]]]:  # type: ignore[type-arg]
+    """Twenty unrelated paragraphs, one every ~40 s, and the matching sync map."""
+    import random
+
+    vocab = (
+        "storm spren chasm bridge spear honor oath light shard blade tower wind "
+        "truth sky stone river song rhythm glyph flute map tide ember lantern "
+        "hollow ridge cobalt quartz velvet saddle orchard harbor meadow"
+    ).split()
+    paragraphs = [
+        " ".join(random.Random(i).choices(vocab, k=14)) for i in range(20)
+    ]
+    words = _words_for(paragraphs, step=2.0)
+    sync_map = []
+    t = 1.0
+    for i, p in enumerate(paragraphs):
+        n = len(p.split())
+        sync_map.append({
+            "id": f"para_{i:03d}",
+            "audio_start": t,
+            "audio_end": t + n * 2.0,
+            "ebook_pos": f"/body/DocFragment[1]/body/p[{i + 1}]",
+            "text_snippet": p,
+        })
+        t += (n + 1) * 2.0
+    # Sample every entry, not every 10th, so the fixture stays small.
+    return sync_map, words
+
+
+def test_unverified_warning_quiet_on_correct_map() -> None:
+    sync_map, words = _verify_fixture()
+    transcript, ranges = _build_transcript_index(words)
+    with patch("earmark.services.alignment._VERIFY_SAMPLE_STEP", 1):
+        assert _unverified_sync_map_warnings(sync_map, transcript, ranges) == []
+
+
+def test_unverified_warning_fires_when_timestamps_are_shifted() -> None:
+    sync_map, words = _verify_fixture()
+    # Shift every paragraph ~7 minutes late — well outside the ±90 s window.
+    for e in sync_map:
+        e["audio_start"] = (e["audio_start"] + 420.0) % 800.0
+    transcript, ranges = _build_transcript_index(words)
+    with patch("earmark.services.alignment._VERIFY_SAMPLE_STEP", 1):
+        warnings = _unverified_sync_map_warnings(sync_map, transcript, ranges)
+    assert len(warnings) == 1
+    assert warnings[0].startswith("sync_map_unverified:")
